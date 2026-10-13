@@ -1,0 +1,982 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Moskauer Kreml und Roter Platz – 3D</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #a9c8e6; font-family: -apple-system, "Helvetica Neue", Arial, sans-serif; color: #f2f2f2; }
+  canvas { display: block; touch-action: none; cursor: pointer; }
+  .panel { position: fixed; background: rgba(22, 26, 34, .84); border-radius: 8px; padding: 10px 14px; backdrop-filter: blur(6px); }
+  #head { top: 12px; left: 12px; width: 250px; max-width: calc(100vw - 52px); }
+  #head h1 { font-size: 15px; margin: 0 0 4px; font-weight: 600; }
+  #head p { font-size: 12px; margin: 0 0 8px; line-height: 1.45; color: #c8ccd4; }
+  #places { list-style: none; margin: 0; padding: 0; max-height: calc(100vh - 215px); overflow-y: auto; }
+  #places li { font-size: 13px; padding: 4px 6px; border-radius: 5px; cursor: pointer; display: flex; align-items: center; gap: 8px; }
+  #places li:hover { background: rgba(255, 255, 255, .13); }
+  #places li.grp { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: #9aa3b2; cursor: default; padding-top: 9px; }
+  #places li.grp:hover { background: none; }
+  #places i { width: 10px; height: 10px; border-radius: 50%; flex: none; border: 1px solid rgba(255,255,255,.5); }
+  button { font: inherit; font-size: 12px; color: #f2f2f2; background: rgba(255,255,255,.12); border: 0; border-radius: 5px; padding: 4px 9px; cursor: pointer; margin: 0 4px 8px 0; }
+  button.on { background: #b98a1a; }
+  #info { bottom: 14px; left: 50%; transform: translateX(-50%); width: min(540px, calc(100vw - 52px)); display: none; }
+  #info h2 { font-size: 15px; margin: 0 22px 2px 0; }
+  #info .sub { font-size: 12px; color: #e3c36a; margin-bottom: 5px; }
+  #info p { font-size: 13px; line-height: 1.45; margin: 0; color: #dfe2e8; }
+  #close { position: absolute; top: 6px; right: 10px; cursor: pointer; font-size: 18px; color: #aaa; }
+  #credit { position: fixed; right: 8px; bottom: 6px; font-size: 10px; color: #26303c; }
+  #map { position: fixed; inset: 0; background: #fff; }
+  @media (max-width: 640px) { #head p { display: none; } #places { max-height: 40vh; } }
+</style>
+</head>
+<body>
+<div id="head" class="panel">
+  <h1>Moskauer Kreml und Roter Platz</h1>
+  <p>Klicken: gewählte Figur geht dorthin · Klick auf eine Figur wählt sie · Ziehen: Kamera drehen · Mausrad / Zwei-Finger: Zoom</p>
+  <button id="toggle">Orte</button><button id="labels" class="on">Beschriftung</button><button id="fast">Schnell gehen</button><button id="who"></button>
+  <ul id="places"></ul>
+</div>
+<div id="info" class="panel"><span id="close">×</span><h2></h2><div class="sub"></div><p></p></div>
+<div id="credit">Grundrisse © OpenStreetMap-Mitwirkende</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="kreml-data.js"></script>
+<script>
+const K = window.KREML;
+
+// ---------- Grundgerüst ----------
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xa9c8e6);
+scene.fog = new THREE.Fog(0xa9c8e6, 700, 2600);
+const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 1.5, 5000);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+
+scene.add(new THREE.HemisphereLight(0xdfeaff, 0x8a8370, 0.78));
+const sun = new THREE.DirectionalLight(0xfff4e0, 0.85), SUN = new THREE.Vector3(260, 420, 300);
+sun.castShadow = true;
+sun.shadow.mapSize.set(4096, 4096);
+Object.assign(sun.shadow.camera, { left: -330, right: 330, top: 330, bottom: -330, near: 50, far: 1300 });
+sun.shadow.bias = -0.0008;
+scene.add(sun, sun.target);
+
+// ---------- Materialien ----------
+const L = (c, o) => new THREE.MeshLambertMaterial(Object.assign({ color: c }, o));
+const P = (c, s, sh) => new THREE.MeshPhongMaterial({ color: c, specular: s, shininess: sh });
+const white = L(0xf4f1ea), dark = L(0x2b3038);
+const roofGrey = L(0x8d9499), roofGreen = L(0x4f8a6b), tentGreen = L(0x3f7358), red = L(0xa9412f), brick = L(0xb5553c);
+const gold = P(0xe2a91f, 0xfff1a8, 90), silver = P(0xb9bfc6, 0xffffff, 80), bronze = P(0x5b5a44, 0x9a936a, 30);
+const flatMats = new Map();
+function flatOf(mat) {                               // Lambert kennt in r128 kein flatShading
+  if (!flatMats.has(mat)) flatMats.set(mat, mat.isMeshPhongMaterial ? Object.assign(mat.clone(), { flatShading: true }) : new THREE.MeshPhongMaterial({ color: mat.color, map: mat.map, flatShading: true, shininess: 4, specular: 0x0a0a0a }));
+  return flatMats.get(mat);
+}
+const whiteFlat = flatOf(white), brickFlat = flatOf(brick);
+const ruby = new THREE.MeshPhongMaterial({ color: 0xd3122a, emissive: 0x5a0008, specular: 0xffb0b0, shininess: 100 });
+
+// ---------- Geometrie-Helfer (y = Unterkante) ----------
+function box(p, w, h, d, x, y, z, mat) {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+  m.position.set(x, y + h / 2, z); p.add(m); return m;
+}
+function cyl(p, rt, rb, h, x, y, z, mat, seg = 24) {
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(rt, rb, h, seg), mat);
+  m.position.set(x, y + h / 2, z); p.add(m); return m;
+}
+function hip(p, w, d, h, x, y, z, mat) {           // Zeltdach über Rechteck
+  const geo = new THREE.ConeGeometry(Math.SQRT1_2, h, 4); geo.rotateY(Math.PI / 4);
+  const m = new THREE.Mesh(geo, flatOf(mat));
+  m.scale.set(w, 1, d); m.position.set(x, y + h / 2, z); p.add(m); return m;
+}
+function cone(p, r, h, x, y, z, mat, seg = 8) {
+  const m = new THREE.Mesh(new THREE.ConeGeometry(r, h, seg), seg <= 8 ? flatOf(mat) : mat);
+  m.position.set(x, y + h / 2, z); p.add(m); return m;
+}
+const ONION = [[.86, 0], [1.08, .22], [1.2, .55], [1.1, .9], [.8, 1.25], [.42, 1.6], [.15, 1.92], [0, 2.15]];
+function onion(p, r, x, y, z, mat, cross = true) {
+  const m = new THREE.Mesh(new THREE.LatheGeometry(ONION.map(q => new THREE.Vector2(q[0] * r, q[1] * r)), 24), mat);
+  m.position.set(x, y, z); p.add(m);
+  if (!cross) return;
+  const t = y + 2.1 * r, s = Math.max(r, 1.2);
+  box(p, .09 * s, 1.1 * s, .09 * s, x, t, z, gold);
+  box(p, .5 * s, .08 * s, .08 * s, x, t + .7 * s, z, gold);
+  box(p, .3 * s, .07 * s, .07 * s, x, t + .9 * s, z, gold);
+}
+function domeTower(p, r, drumH, x, y, z, domeMat, drumMat = white) {
+  const dr = r * .82;
+  cyl(p, dr, dr, drumH, x, y, z, drumMat, 20);
+  cyl(p, dr * 1.08, dr * 1.08, r * .18, x, y + drumH - r * .18, z, domeMat, 20);
+  if (r > 1.4) for (let k = 0; k < 8; k++) {
+    const a = k * Math.PI / 4;
+    box(p, dr * .22, drumH * .55, .3, x + Math.sin(a) * dr, y + drumH * .25, z + Math.cos(a) * dr, dark).rotation.y = a;
+  }
+  onion(p, r, x, y + drumH, z, domeMat);
+}
+function star(p, r, x, y, z) {
+  const s = new THREE.Shape();
+  for (let k = 0; k < 10; k++) { const a = k * Math.PI / 5 + Math.PI / 2, q = k % 2 ? r * .42 : r; s[k ? 'lineTo' : 'moveTo'](Math.cos(a) * q, Math.sin(a) * q); }
+  const geo = new THREE.ExtrudeGeometry(s, { depth: .5, bevelEnabled: false }); geo.translate(0, 0, -.25);
+  for (const ry of [0, Math.PI / 2]) { const m = new THREE.Mesh(geo, ruby); m.position.set(x, y + r, z); m.rotation.y = ry; p.add(m); }
+  box(p, .25, 1.4, .25, x, y - 1.2, z, gold);
+}
+function winCanvas(wall) {
+  const c = document.createElement('canvas'); c.width = 64; c.height = 96;
+  const g = c.getContext('2d');
+  g.fillStyle = wall; g.fillRect(0, 0, 64, 96);
+  g.fillStyle = 'rgba(255,255,255,.75)'; g.fillRect(0, 0, 64, 6); g.fillRect(17, 20, 30, 56);
+  g.fillStyle = '#2c3540'; g.beginPath(); g.moveTo(21, 72); g.lineTo(21, 36); g.arc(32, 36, 11, Math.PI, 0); g.lineTo(43, 72); g.fill();
+  return c;
+}
+function texBox(p, w, h, d, x, y, z, wall, roofMat, cw = 4.5, floors = 2) {
+  const mk = n => { const t = new THREE.CanvasTexture(winCanvas(wall)); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(Math.max(1, Math.round(n / cw)), floors); return new THREE.MeshLambertMaterial({ map: t }); };
+  const a = mk(d), b = mk(w);
+  return box(p, w, h, d, x, y, z, [a, a, roofMat, roofMat, b, b]);
+}
+// Wandmaterial für extrudierte Grundrisse (UV in Metern)
+const wallCache = {};
+function wallMat(col, cw = 4.4, fh = 4) {
+  const k = col + cw + fh;
+  if (!wallCache[k]) {
+    const t = new THREE.CanvasTexture(winCanvas(col)); t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.flipY = false; t.repeat.set(1 / cw, 1 / fh); t.offset.y = -1 / fh; t.anisotropy = 4;
+    wallCache[k] = new THREE.MeshLambertMaterial({ map: t });
+  }
+  return wallCache[k];
+}
+function patternMat(kind, c1, c2, rx = 2, ry = 1) {    // gemusterte Kuppeln
+  const c = document.createElement('canvas'); c.width = c.height = 128; const g = c.getContext('2d');
+  g.fillStyle = c1; g.fillRect(0, 0, 128, 128); g.fillStyle = c2; g.strokeStyle = c2;
+  if (kind === 'spiral') for (let x = -128; x < 128; x += 32) { g.beginPath(); g.moveTo(x, 0); g.lineTo(x + 15, 0); g.lineTo(x + 143, 128); g.lineTo(x + 128, 128); g.fill(); }
+  if (kind === 'ribs') for (let x = 0; x < 128; x += 32) g.fillRect(x, 0, 15, 128);
+  if (kind === 'diamond') for (let x = 0; x < 128; x += 32) for (let y = 0; y < 128; y += 32) { g.beginPath(); g.moveTo(x + 16, y + 3); g.lineTo(x + 29, y + 16); g.lineTo(x + 16, y + 29); g.lineTo(x + 3, y + 16); g.fill(); }
+  if (kind === 'zig') { g.lineWidth = 11; for (let y = 8; y < 128; y += 32) { g.beginPath(); for (let x = 0; x <= 128; x += 16) g.lineTo(x, y + (x / 16 % 2 ? 14 : 0)); g.stroke(); } }
+  const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(rx, ry);
+  return new THREE.MeshPhongMaterial({ map: t, specular: 0x666666, shininess: 40 });
+}
+
+// ---------- Wegenetz (Raster für Pfadsuche) ----------
+const G = 2, X0 = -470, Z0 = -640, NX = 505, NZ = 535;
+const blocked = new Uint8Array(NX * NZ), reach = new Uint8Array(NX * NZ);
+const cx = v => Math.max(0, Math.min(NX - 1, Math.floor((v - X0) / G)));
+const cz = v => Math.max(0, Math.min(NZ - 1, Math.floor((v - Z0) / G)));
+const wx = i => X0 + (i + .5) * G, wz = j => Z0 + (j + .5) * G;
+const isBlocked = (x, z) => blocked[cz(z) * NX + cx(x)];
+function pip(x, z, o) {
+  let c = false;
+  for (let i = 0, n = o.length, j = n - 2; i < n; j = i, i += 2) {
+    const zi = o[i + 1], zj = o[j + 1];
+    if ((zi > z) !== (zj > z) && x < (o[j] - o[i]) * (z - zi) / (zj - zi) + o[i]) c = !c;
+  }
+  return c;
+}
+function raster(p, val) {
+  let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9;
+  for (let i = 0; i < p.o.length; i += 2) { x0 = Math.min(x0, p.o[i]); x1 = Math.max(x1, p.o[i]); z0 = Math.min(z0, p.o[i + 1]); z1 = Math.max(z1, p.o[i + 1]); }
+  for (let j = cz(z0); j <= cz(z1); j++) for (let i = cx(x0); i <= cx(x1); i++) {
+    const x = wx(i), z = wz(j);
+    if (pip(x, z, p.o) && !(p.i || []).some(h => pip(x, z, h))) blocked[j * NX + i] = val;
+  }
+}
+
+// ---------- Flächen und Körper aus Grundrissen ----------
+function shapeOf(o, holes) {
+  const mk = (s, r) => { for (let i = 0; i < r.length; i += 2) s[i ? 'lineTo' : 'moveTo'](r[i], -r[i + 1]); return s; };
+  const s = mk(new THREE.Shape(), o);
+  for (const h of holes || []) s.holes.push(mk(new THREE.Path(), h));
+  return s;
+}
+function flatMesh(list, color, y) {
+  if (!list.length) return;
+  const geo = new THREE.ShapeGeometry(list.map(p => shapeOf(p.o, p.i))); geo.rotateX(-Math.PI / 2);
+  const m = new THREE.Mesh(geo, L(color)); m.position.y = y; m.receiveShadow = true; m.userData.flat = true; scene.add(m); return m;
+}
+const solids = [], infos = [];
+function register(obj, info, x, z, ly) {
+  if (!info) return;
+  obj.userData.info = info;
+  if (info.x === undefined) { info.x = x; info.z = z; info.ly = ly; infos.push(info); }
+}
+function extrude(b, h, wall, roofM, y0 = 0) {
+  const geo = new THREE.ExtrudeGeometry(shapeOf(b.o, b.i), { depth: h, bevelEnabled: false }); geo.rotateX(-Math.PI / 2);
+  const m = new THREE.Mesh(geo, [roofM, wall]); m.position.y = y0; scene.add(m); solids.push(m); return m;
+}
+function slopedRoof(b, y, mat, s = 2.6) {             // umlaufende Dachschräge über dem Grundriss
+  const geo = new THREE.ExtrudeGeometry(shapeOf(b.o, b.i), { depth: .02, bevelEnabled: true, bevelThickness: s * .75, bevelSize: s, bevelOffset: -s, bevelSegments: 1 });
+  geo.rotateX(-Math.PI / 2);
+  const m = new THREE.Mesh(geo, mat); m.position.y = y; scene.add(m); solids.push(m); return m;
+}
+function frame(x, z, a, info, ly) {                  // lokales +x zeigt in Richtung a (Karte: x Ost, z Süd)
+  const g = new THREE.Group(); g.position.set(x, 0, z); g.rotation.y = -a; scene.add(g); solids.push(g);
+  register(g, info, x, z, ly); return g;
+}
+
+// ---------- Beschreibungen ----------
+const S = 'Kathedralenplatz', KR = 'Kreml', TU = 'Türme', RP = 'Roter Platz und Umgebung';
+const INFO = {
+  3028585: { name: 'Mariä-Entschlafens-Kathedrale', sub: 'Uspenski-Kathedrale · 1475–1479 · Aristotele Fioravanti', color: '#e2a91f', grp: S,
+    text: 'Hauptkirche des Moskauer Staates und Krönungskirche der Zaren. Weißer Kalksteinbau mit fünf vergoldeten Kuppeln an der Nordseite des Platzes.' },
+  1359243: { name: 'Erzengel-Michael-Kathedrale', sub: 'Archangelski-Kathedrale · 1505–1508 · Aloisio der Neue', color: '#b9bfc6', grp: S,
+    text: 'Grablege der Moskauer Großfürsten und Zaren bis zu Peter dem Großen. Fassade mit Renaissance-Elementen; vergoldete Mittelkuppel, vier silberfarbene Nebenkuppeln.' },
+  1359251: { name: 'Mariä-Verkündigungs-Kathedrale', sub: 'Blagoweschtschenski-Kathedrale · 1484–1489 · Pskower Baumeister', color: '#e2a91f', grp: S,
+    text: 'Hauskirche der Großfürsten und Zaren, mit dem Palast verbunden. Neun vergoldete Kuppeln und vergoldete Dächer.' },
+  depo: { name: 'Gewandniederlegungskirche', sub: 'Rispoloschenski-Kirche · 1484–1485 · Pskower Baumeister', color: '#e2a91f', grp: S,
+    text: 'Kleine einkuppelige Hauskirche der Moskauer Metropoliten und Patriarchen zwischen Entschlafens-Kathedrale und Facettenpalast.' },
+  1359281: { name: 'Glockenturm Iwan der Große', sub: '1505–1508 · Bon Frjasin · 1600 auf 81 m erhöht', color: '#f4f1ea', grp: S,
+    text: 'Lange das höchste Bauwerk Russlands. Nördlich schließen die Entschlafens-Glockenwand (1532–1543) und der Filaret-Anbau (1624) an.' },
+  facets: { name: 'Facettenpalast', sub: 'Granowitaja Palata · 1487–1491 · Marco Ruffo, Pietro Antonio Solari', color: '#d9d5cc', grp: S,
+    text: 'Festsaal der Großfürsten; benannt nach der Ostfassade aus facettierten Kalksteinquadern. An der Südseite die Rote Treppe, über die die Zaren zur Krönung schritten.' },
+  1359249: { name: 'Zwölf-Apostel-Kirche', sub: '1653–1656 · im Auftrag von Patriarch Nikon', color: '#b9bfc6', grp: S,
+    text: 'Fünfkuppelige Hauskirche des Patriarchenpalastes, über zwei Durchfahrten errichtet.' },
+  1359248: { name: 'Patriarchenpalast', sub: '1635–1656', color: '#f1ede4', grp: S,
+    text: 'Residenz der Patriarchen; heute Museum für angewandte Kunst und Alltagskultur des 17. Jahrhunderts.' },
+  bell: { name: 'Zarenglocke', sub: '1733–1735 · Iwan und Michail Motorin · rund 200 t', color: '#5b5a44', grp: S,
+    text: 'Größte Glocke der Welt, 6,14 m hoch. Beim Brand von 1737 sprang ein 11,5 t schweres Stück ab; geläutet wurde sie nie.' },
+  cannon: { name: 'Zarenkanone', sub: '1586 · Andrei Tschochow · Kaliber 890 mm', color: '#5b5a44', grp: S,
+    text: 'Bronzegeschütz von rund 40 t und 5,34 m Länge. Lafette und Kugeln sind gusseiserne Zutaten von 1835.' },
+  225033: { name: 'Großer Kremlpalast', sub: '1838–1849 · Konstantin Thon', color: '#ead9a0', grp: KR,
+    text: 'Ehemalige Moskauer Zarenresidenz mit 125 m langer Flussfassade; der Komplex schließt Terem-Palast und Facettenpalast ein. Heute Repräsentationsbau für Staatsempfänge.' },
+  terem: { name: 'Terem-Palast und Terem-Kirchen', sub: '1635–1636 · Baschen Ogurzow u. a.', color: '#b9503d', grp: KR,
+    text: 'Wohnpalast der ersten Romanow-Zaren im Inneren des Palastkomplexes. Die Hauskirchen tragen elf kleine vergoldete Kuppeln.' },
+  1359335: { name: 'Rüstkammer', sub: '1844–1851 · Konstantin Thon', color: '#e6c96a', grp: KR,
+    text: 'Schatzkammer-Museum mit Zarenkronen, Thronen, Kutschen, Rüstungen und Fabergé-Eiern; im selben Bau der Diamantenfonds.' },
+  3031379: { name: 'Staatlicher Kremlpalast', sub: 'Kongresspalast · 1959–1961 · Michail Possochin', color: '#f4f4f0', grp: KR,
+    text: 'Moderner Bau aus Glas und weißem Marmor mit einem Saal für rund 6000 Personen; ursprünglich für Parteitage errichtet, heute Konzert- und Ballettbühne.' },
+  1359337: { name: 'Lustpalast', sub: 'Poteschny-Palast · 1651–1652', color: '#fdbf97', grp: KR,
+    text: 'Als Bojarenwohnhaus für Ilja Miloslawski erbaut; ab 1672 Ort des ersten russischen Hoftheaters.' },
+  51497: { name: 'Arsenal', sub: 'Zeughaus · 1702–1736, 1816–1828 erneuert', color: '#e6c56a', grp: KR,
+    text: 'Unter Peter dem Großen begonnener Waffenspeicher entlang der Nordwestmauer. Vor der Fassade stehen erbeutete Geschütze aus dem Krieg von 1812.' },
+  1359233: { name: 'Senatspalast', sub: '1776–1787 · Matwei Kasakow', color: '#e9c867', grp: KR,
+    text: 'Klassizistischer Bau auf dreieckigem Grundriss mit Kuppelrotunde (Katharinensaal). Amtssitz des russischen Präsidenten.' },
+  3030568: { name: 'Basilius-Kathedrale', sub: '1555–1561 · Barma und Postnik', color: '#c0452f', grp: RP,
+    text: 'Im Auftrag Iwans IV. zum Sieg über das Khanat Kasan errichtet: acht Kapellen mit farbigen Zwiebelkuppeln um einen zentralen Zeltdachturm, dazu Glockenturm.' },
+  3272726: { name: 'Lenin-Mausoleum', sub: '1929–1930 · Alexei Schtschussew', color: '#7a2a26', grp: RP,
+    text: 'Stufenpyramide aus rotem Granit und schwarzem Labradorit vor der Kremlmauer; dahinter die Nekropole an der Kremlmauer.' },
+  3330565: { name: 'GUM', sub: 'Obere Handelsreihen · 1890–1893 · Alexander Pomeranzew', color: '#e5dcc8', grp: RP,
+    text: 'Rund 250 m langes Kaufhaus an der Ostseite des Roten Platzes mit drei Passagen unter Glasdächern von Wladimir Schuchow.' },
+  5963922: { name: 'Historisches Museum', sub: '1875–1883 · Wladimir Sherwood', color: '#8e2f25', grp: RP,
+    text: 'Roter Backsteinbau im russischen Stil am Nordende des Roten Platzes.' },
+  7624254: { name: 'Kasaner Kathedrale', sub: '1636 geweiht · 1936 abgerissen · 1990–1993 wiederaufgebaut', color: '#c86a5c', grp: RP,
+    text: 'Dankkirche für die Befreiung Moskaus von 1612 an der Nordostecke des Roten Platzes.' },
+  1932724: { name: 'Auferstehungstor', sub: '1680 · 1931 abgerissen · 1994–1995 rekonstruiert', color: '#a9412f', grp: RP,
+    text: 'Doppeltor mit zwei Zeltdachtürmen zwischen Historischem Museum und ehemaliger Stadtduma; davor die Iberische Kapelle.' },
+  3226496: { name: 'Lobnoje Mesto', sub: 'Steintribüne · heutige Form 1786', color: '#d9d5cc', grp: RP,
+    text: 'Runde Plattform, von der Zarenerlasse verkündet wurden.' },
+  3062892: { name: 'Manege', sub: '1817 · Agustín de Betancourt, Fassaden Joseph Bové', color: '#efe6c8', grp: RP,
+    text: 'Ehemalige Reithalle mit stützenfreiem Dachtragwerk; nach dem Brand von 2004 wiederaufgebaut, heute Ausstellungshalle.' },
+  3061015: { name: 'Kutafja-Turm', sub: '1516 · 13,5 m', color: '#f4f1ea', grp: TU,
+    text: 'Einziger erhaltener Brückenkopfturm des Kremls; über die Dreifaltigkeitsbrücke mit dem Dreifaltigkeitsturm verbunden.' },
+};
+// Türme: [Typ, Baujahr/Baumeister, Text, Stern, Uhr]
+const TOWERS = {
+  1360656: ['gate', '1491 · Pietro Antonio Solari', 'Haupttor zum Roten Platz mit der Kreml-Uhr und ihrem Glockenspiel; Turmaufsatz von 1624–1625.', 1, 1],
+  1359372: ['gate', '1491 · Pietro Antonio Solari', 'Torturm am Nordende des Roten Platzes; neugotischer Aufsatz aus dem frühen 19. Jahrhundert.', 1],
+  1360627: ['gate', '1495–1499 · Alewis Frjasin', 'Höchster Turm des Kremls und heutiger Besuchereingang.', 1],
+  1360630: ['boro', '1490 · Pietro Antonio Solari', 'Stufenförmiger Torturm an der Südwestseite.', 1],
+  1360648: ['rd', '1488 · Anton Frjasin', 'Runder Eckturm an der Moskwa; im 17. Jahrhundert stand hier eine Wasserhebemaschine für die Kremlgärten.', 1],
+  1360651: ['rd', '1487–1488 · Marco Ruffo', 'Runder Eckturm im Südosten an der Moskwa.'],
+  1360653: ['rd', '1492 · Pietro Antonio Solari', 'Mächtigster Eckturm an der Nordspitze des Kremls.'],
+  3229147: ['sq', '1485 · Anton Frjasin', 'Ältester Turm der heutigen Kremlmauer; benannt nach einem geheimen Gang zum Fluss.'],
+  1360663: ['tsar', '1680', 'Kleinster Turm: ein Zeltdach-Pavillon auf der Mauerkrone.'],
+  1359374: ['sq'], 1360661: ['sq'], 1360645: ['sq'], 1360660: ['sq'], 3229567: ['sq'], 1360642: ['sq'],
+  3229300: ['sq'], 1360631: ['sq'], 1360655: ['sq'], 1360654: ['sq'],
+};
+const SKIP = new Set([3028585, 1359243, 1359251, 1359249, 1359281, 1359278, 3224486, 7624254, 3226496, 3061015, 'depo', ...Object.keys(TOWERS).map(Number)]);
+// Abweichende Darstellung einzelner Grundrisse: h Höhe, c Wandfarbe, r Dach, s Dachschräge
+const OV = {
+  225033: { h: 22, c: '#ead9a0', r: roofGreen, s: 3 }, facets: { h: 16, c: '#f4f1ea', r: roofGreen, s: 3.5, plain: 1 },
+  1359248: { h: 15, c: '#f1ede4', r: roofGreen, s: 2.5, fh: 5 }, 1359335: { h: 20, c: '#e6c96a', r: roofGreen, s: 3, fh: 6.6 },
+  3031379: { h: 27, kp: 1 }, 1359337: { h: 17, c: '#f3b88f', r: roofGreen, s: 2.5 },
+  51497: { h: 22, c: '#e6c56a', r: L(0x59615c), s: 3.5, fh: 7.3, cw: 5.5 }, 1359233: { h: 22, c: '#e9c867', r: L(0x59615c), s: 3.5, fh: 7.3, cw: 5 },
+  3272726: { h: 1.2, c: '#8f8a86', plain: 1 }, 3030568: { h: 6, c: '#b5553c', plain: 1 },
+  3330565: { h: 24, c: '#e5dcc8', r: L(0xa9b6b7), s: 4, fh: 6 }, 5963922: { h: 22, c: '#8e2f25', r: silver, s: 3.5, fh: 5.5 },
+  1932724: { h: 14, c: '#a9412f', r: tentGreen, s: 1.5, fh: 7 }, 3062892: { h: 13, c: '#efe6c8', r: roofGreen, s: 4.5, fh: 13, cw: 6 },
+  452031: { h: 20, c: '#e3d6b8' }, 20352549: { h: 15, c: '#b9b6ae', plain: 1 },
+};
+const NAMED = { white: '#f1ede4', lightgrey: '#d9d9d4', gold: '#e6c96a', pink: '#e9b7b0', '#ec8859': '#a9412f' };
+const CITY = ['#d9cfbd', '#e3d3a8', '#cfc6b8', '#d8b9a0', '#c9d0cf', '#e6dcc6', '#d6c7ad'];
+const byKey = {};
+for (const b of K.B) { const k = b.t || b.id; if (b.p === 0 && !byKey[k]) byKey[k] = b; }
+const R = k => { const r = byKey[k].r; return { x: r[0], z: r[1], w: r[2], d: r[3], a: r[4] }; };
+
+// ---------- Boden ----------
+const groundMesh = new THREE.Mesh(new THREE.PlaneGeometry(6000, 6000), L(0xa6a299));
+groundMesh.rotation.x = -Math.PI / 2; groundMesh.receiveShadow = true; scene.add(groundMesh);
+const darkSq = n => /Roter Platz|Васильевский/.test(n);
+flatMesh(K.SQ.filter(p => !darkSq(p.n)), 0xc6c0b2, .1);
+flatMesh(K.SQ.filter(p => darkSq(p.n)), 0x77726e, .12);
+flatMesh(K.WA, 0x4d7fa8, .18);
+flatMesh(K.GR, 0x78a35f, .25);
+flatMesh(K.WD, 0x5c8f4c, .3);
+flatMesh(K.BR, 0x8b8985, .5);
+
+// ---------- Grundrisse: Gebäude, Mauern ----------
+const merlons = [], roofCity = L(0x7d8287), wallRed = L(0xa9412f);
+const kpMat = (() => {                                 // Staatlicher Kremlpalast: Marmorpylone und Glas
+  const c = document.createElement('canvas'); c.width = 32; c.height = 64; const g = c.getContext('2d');
+  g.fillStyle = '#f4f4f0'; g.fillRect(0, 0, 32, 64); g.fillStyle = '#3d4a55'; g.fillRect(9, 5, 20, 52);
+  const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.flipY = false; t.repeat.set(1 / 3.1, 1 / 27); t.offset.y = -1 / 27;
+  return new THREE.MeshLambertMaterial({ map: t });
+})();
+for (const b of K.B) {
+  const key = b.t || b.id;
+  raster(b, 1);
+  if (SKIP.has(key)) continue;
+  if (b.k === 'wall') {
+    const h = b.h || 12;
+    extrude(b, h, wallRed, wallRed);
+    for (let i = 0, n = b.o.length; i < n; i += 2) {
+      const ax = b.o[i], az = b.o[i + 1], bx = b.o[(i + 2) % n], bz = b.o[(i + 3) % n], len = Math.hypot(bx - ax, bz - az);
+      if (len < 5) continue;
+      const k = Math.floor(len / 2.7);
+      for (let q = 0; q < k; q++) { const t = (q + .5) / k; merlons.push([ax + (bx - ax) * t, h + 1, az + (bz - az) * t, Math.atan2(bz - az, bx - ax)]); }
+    }
+    continue;
+  }
+  const ov = OV[key] || {};
+  let ar = 0; for (let i = 0, n = b.o.length; i < n; i += 2) ar += b.o[i] * b.o[(i + 3) % n] - b.o[(i + 2) % n] * b.o[i + 1];
+  const h = ov.h || b.h || (b.lv ? b.lv * 3.8 + 2 : Math.abs(ar) < 300 ? 3.5 : 9 + (b.id % 5) * 2.5);   // Kleinbauten ohne Höhenangabe flach
+  let col = ov.c || NAMED[b.c] || (/^#[0-9a-f]{6}$/i.test(b.c) ? b.c : CITY[b.id % CITY.length]);
+  const wall = ov.kp ? kpMat : (ov.plain || h < 7) ? L(col) : wallMat(col, ov.cw, ov.fh);
+  const m = extrude(b, h, wall, ov.r && !ov.s ? ov.r : roofCity);
+  if (ov.s) slopedRoof(b, h, ov.r, ov.s);
+  const info = INFO[key] || (b.n ? (byKey[key].info = byKey[key].info || { name: b.n }) : null);
+  register(m, info, b.r[0], b.r[1], h + 14);
+}
+(function () {
+  const im = new THREE.InstancedMesh(new THREE.BoxGeometry(1.4, 2, .9), wallRed, merlons.length), o = new THREE.Object3D();
+  merlons.forEach((q, i) => { o.position.set(q[0], q[1], q[2]); o.rotation.y = -q[3]; o.updateMatrix(); im.setMatrixAt(i, o.matrix); });
+  scene.add(im);
+})();
+
+// ---------- Kirchen ----------
+// Kreuzkuppelkirche im lokalen Rahmen: Apsiden zeigen nach lokal +x (Osten)
+function church(g, o) {
+  const { w, d, h, bx, bz } = o, roof = o.roof || roofGrey, wm = o.wall || white;
+  const p = new THREE.Group(); p.position.set(o.ox || 0, 0, o.oz || 0); g.add(p);
+  box(p, w, h, d, 0, 0, 0, wm);
+  box(p, w + .6, .5, d + .6, 0, h * .48, 0, white);
+  const zk = [roof, wm, wm], rx = w / bx / 2, rz = d / bz / 2;
+  for (let i = 0; i <= bx; i++) for (const s of [-1, 1]) box(p, .8, h, .5, -w / 2 + 2 * rx * i, 0, s * d / 2, white);
+  for (let i = 0; i <= bz; i++) box(p, .5, h, .8, -w / 2, 0, -d / 2 + 2 * rz * i, white);
+  for (let i = 0; i < bx; i++) {
+    const x = -w / 2 + rx + 2 * rx * i;
+    cyl(p, rx, rx, d + .3, x, h - (d + .3) / 2, 0, zk).rotation.x = Math.PI / 2;
+    for (const s of [-1, 1]) { box(p, .7, h * .2, .3, x, h * .6, s * d / 2, dark); if (h > 16) box(p, .7, h * .16, .3, x, h * .2, s * d / 2, dark); }
+  }
+  for (let i = 0; i < bz; i++) {
+    const z = -d / 2 + rz + 2 * rz * i;
+    cyl(p, rz, rz, w + .3, 0, h - (w + .3) / 2, z, zk).rotation.z = Math.PI / 2;
+    box(p, .3, h * .2, .7, -w / 2, h * .6, z, dark);
+  }
+  box(p, .4, h * .28, Math.min(3, d * .16), -w / 2, 0, 0, dark);
+  box(p, Math.min(3, w * .12), h * .28, .4, 0, 0, d / 2, dark);
+  const n = o.apses || 3, ra = d / n / 2, ah = h * (o.apseH || .7);
+  for (let i = 0; i < n; i++) {
+    const az = -d / 2 + ra + 2 * ra * i;
+    cyl(p, ra, ra, ah, w / 2, 0, az, wm, 16);
+    const cap = new THREE.Mesh(new THREE.SphereGeometry(ra, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2), roof);
+    cap.scale.y = .6; cap.position.set(w / 2, ah, az); p.add(cap);
+  }
+  const base = h + Math.max(rx, rz) * .55;
+  for (const q of o.domes) domeTower(p, q[2], q[3], q[0], base + (q[5] || 0), q[1], q[4] || gold, o.drum || white);
+  return p;
+}
+let r, g;
+r = R(3028585); g = frame(r.x, r.z, r.a, INFO[3028585], 50);
+church(g, { ox: -1.6, w: 37.5, d: 27, h: 24, bx: 4, bz: 3, apses: 5, apseH: .62,
+  domes: [[0, 0, 4.3, 9], [-9.5, -7, 3.2, 6.5], [9.5, -7, 3.2, 6.5], [-9.5, 7, 3.2, 6.5], [9.5, 7, 3.2, 6.5]] });
+box(g, 3, 9, 6, -21.6, 0, 0, white); hip(g, 3.6, 6.6, 3, -21.6, 9, 0, roofGrey);
+
+r = R(1359243); g = frame(r.x, r.z, r.a, INFO[1359243], 46);
+church(g, { ox: -1.8, oz: -2.5, w: 29.5, d: 22.5, h: 22, bx: 5, bz: 3, apses: 3,
+  domes: [[3, 0, 3.8, 8], [-5, -6, 2.7, 6, silver], [10.5, -6, 2.7, 6, silver], [-5, 6, 2.7, 6, silver], [10.5, 6, 2.7, 6, silver]] });
+box(g, 20, 7, 5.5, -4, 0, 11.6, white); box(g, 20.4, .5, 5.9, -4, 7, 11.6, roofGrey);      // Südanbau
+
+r = R(1359251); g = frame(r.x, r.z, r.a, INFO[1359251], 38);
+box(g, 20, 8.5, 26, -1.4, 0, 0, white); box(g, 20.6, .6, 26.6, -1.4, 8.5, 0, gold);
+for (let i = 0; i < 5; i++) { box(g, .4, 4, 1.6, -11.4, 3.2, -9.6 + i * 4.8, dark); if (i < 4) box(g, 1.6, 4, .4, -8.6 + i * 4.8, 3.2, 13, dark); }
+church(g, { ox: .6, w: 16, d: 16, h: 17, bx: 3, bz: 3, apses: 3, roof: gold,
+  domes: [[0, 0, 2.7, 7], [-4.6, -4.6, 1.9, 5], [4.6, -4.6, 1.9, 5], [-4.6, 4.6, 1.9, 5], [4.6, 4.6, 1.9, 5],
+          [-9.2, -10.6, 1.6, 4, gold, -10.6], [5, -10.8, 1.6, 4, gold, -10.6], [-9.2, 10.6, 1.6, 4, gold, -10.6], [5, 10.8, 1.6, 4, gold, -10.6]] });
+
+r = R('depo'); g = frame(r.x, r.z, r.a, INFO.depo, 27);
+church(g, { ox: -.3, oz: 1.2, w: 10.5, d: 9, h: 12, bx: 3, bz: 3, apses: 3, domes: [[0, 0, 1.9, 5]] });
+box(g, 9, 6, 4, -1.5, 0, -5.5, white);
+
+r = R(1359249); g = frame(r.x, r.z, r.a, INFO[1359249], 42);
+church(g, { ox: -1, w: 15.5, d: 15.5, h: 21, bx: 3, bz: 3, apses: 3, apseH: .55,
+  domes: [[0, 0, 2.6, 6, silver], [-4.6, -4.6, 1.9, 4.5, silver], [4.6, -4.6, 1.9, 4.5, silver], [-4.6, 4.6, 1.9, 4.5, silver], [4.6, 4.6, 1.9, 4.5, silver]] });
+
+r = R(7624254); g = frame(r.x, r.z, r.a, INFO[7624254], 34);
+const pink = L(0xc86a5c);
+box(g, 21, 5.5, 22, -1, 0, 0, pink); box(g, 21.6, .5, 22.6, -1, 5.5, 0, roofGreen);
+church(g, { w: 12.5, d: 12.5, h: 14, bx: 3, bz: 3, apses: 3, apseH: .5, wall: pink, roof: roofGreen, domes: [[0, 0, 2.5, 6]] });
+box(g, 5, 15, 5, -9.5, 0, -9, pink); cyl(g, 2.6, 2.6, 4, -9.5, 15, -9, flatOf(pink), 8); cone(g, 3, 8, -9.5, 19, -9, tentGreen); onion(g, .7, -9.5, 27, -9, gold);
+
+// ---------- Glockenturm Iwan der Große ----------
+r = R(1359281); g = frame(r.x, r.z, r.a, INFO[1359281], 90);
+(function () {
+  for (const [rb, rt, h, y] of [[7.6, 7, 30, 0], [6, 5.6, 22, 30], [4.6, 4.3, 12, 52]]) {
+    cyl(g, rt, rb, h, 0, y, 0, whiteFlat, 8);
+    cyl(g, rt + .9, rt + .9, .8, 0, y + h - .4, 0, whiteFlat, 8);
+    for (let k = 0; k < 8; k++) {
+      const a = Math.PI / 8 + k * Math.PI / 4, ap = rt * Math.cos(Math.PI / 8) + .15;
+      box(g, rt * .42, h * .2, .5, Math.sin(a) * ap, y + h * .74, Math.cos(a) * ap, dark).rotation.y = a;
+    }
+  }
+  cyl(g, 3.6, 3.6, 8, 0, 64, 0, white, 20);
+  cyl(g, 3.75, 3.75, 2.4, 0, 68.5, 0, gold, 20);
+  onion(g, 4.1, 0, 72, 0, gold);
+  box(g, 17, 28, 25, -1, 0, -21, white);                                   // Glockenwand
+  for (let i = 0; i < 4; i++) for (const s of [-1, 1]) box(g, .4, 6, 3, -1 + s * 8.5, 19, -30 + i * 6, dark);
+  for (let i = 0; i < 3; i++) box(g, .4, 5, 2.4, -9.5, 6, -28 + i * 7, dark);
+  box(g, 18, 1, 26, -1, 28, -21, roofGrey);
+  domeTower(g, 3, 6, -1, 29, -21, gold);
+  box(g, 14, 24, 12, -1, 0, -39.5, white);                                 // Filaret-Anbau
+  for (const s of [-1, 1]) box(g, .4, 5, 3, -1 + s * 7, 16, -39.5, dark);
+  hip(g, 13, 11, 12, -1, 24, -39.5, L(0xe9e5dc)); onion(g, .9, -1, 36, -39.5, gold);
+})();
+
+// ---------- Facettenpalast: Schaufassade und Rote Treppe ----------
+(function () {
+  const info = INFO.facets, b = byKey.facets;
+  const c = document.createElement('canvas'); c.width = c.height = 64; const x = c.getContext('2d');
+  const tri = (col, q) => { x.fillStyle = col; x.beginPath(); x.moveTo(q[0], q[1]); x.lineTo(q[2], q[3]); x.lineTo(32, 32); x.fill(); };
+  tri('#fbf9f3', [0, 0, 64, 0]); tri('#d6d2c8', [64, 0, 64, 64]); tri('#bcb8ae', [64, 64, 0, 64]); tri('#e8e4db', [0, 64, 0, 0]);
+  const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(22, 11);
+  const f = frame(-32.8, 5.4, -.242, info, 34);
+  box(f, .4, 15.6, 26, .15, 0, 0, [new THREE.MeshLambertMaterial({ map: t }), white, white, white, white, white]);
+  for (let i = 0; i < 4; i++) { box(f, .7, 5.5, 3, .2, 8.3, -9 + i * 6, white); box(f, .4, 4.5, 2, .45, 8.8, -9 + i * 6, dark); }
+  const s = frame(-48.7, 30.3, -.242);                                     // Treppe an der Südseite, von Ost nach West steigend
+  for (let i = 0; i < 9; i++) box(s, 2.6, 1 + i * .9, 4.5, 11.5 - i * 2.6, 0, 3, white);
+  for (const [px, py] of [[9, 4.5], [1, 7.5], [-8, 10.5]]) hip(s, 4.6, 5.2, 3, px, py, 3, gold);
+  register(s, info);
+})();
+
+// ---------- Großer Kremlpalast: Hauptbau, Terem-Palast ----------
+(function () {
+  const info = INFO[225033];
+  const m = frame(-108.5, 87.6, -.2434); register(m, info);
+  texBox(m, 121, 8.5, 38, 0, 22, 0, '#ead9a0', roofGreen, 5, 1);
+  box(m, 122, 1, 39, 0, 30.5, 0, white); hip(m, 121, 38, 5, 0, 31.5, 0, roofGreen);
+  box(m, 16, 7, 9, 0, 31, 13, white); hip(m, 16, 9, 5, 0, 38, 13, roofGreen);
+  box(m, .25, 9, .25, 0, 41, 13, dark);
+  box(m, 5, 1, .1, 2.6, 48.4, 13, L(0xffffff)); box(m, 5, 1, .1, 2.6, 47.4, 13, L(0x1c3f94)); box(m, 5, 1, .1, 2.6, 46.4, 13, L(0xd52b1e));
+  const t = frame(-118, 2.5, -.21, INFO.terem, 52);
+  texBox(t, 36, 6, 18, 0, 22, 0, '#b9503d', gold, 3.6, 1);
+  texBox(t, 26, 5.5, 13, 0, 28, 0, '#b9503d', gold, 3.3, 1);
+  hip(t, 27, 14, 5.5, 0, 33.5, 0, gold);
+  box(t, 5, 6, 5, -14, 28, 0, L(0xb9503d)); hip(t, 5.6, 5.6, 5, -14, 34, 0, gold);
+  const k = frame(-79, -19.5, -.21); register(k, INFO.terem);              // Terem-Kirchen mit elf Kuppeln
+  box(k, 17, 7, 9, 0, 22, 0, white);
+  for (let i = 0; i < 11; i++) domeTower(k, .95, 3, -6.2 + (i % 6) * 2.4 + (i > 5 ? 1.2 : 0), 29, i > 5 ? 2 : -2, gold, L(0x3f7f86));
+})();
+
+// ---------- Senat, Kremlpalast, Lustpalast: Aufbauten ----------
+g = frame(105, -293, 0); register(g, INFO[1359233]);
+cyl(g, 12.2, 12.2, 27, 0, 0, 0, L(0xe9c867), 28); cyl(g, 12.6, 12.6, 1, 0, 26.5, 0, white, 28);
+(function () {
+  const d = new THREE.Mesh(new THREE.SphereGeometry(12.2, 28, 12, 0, Math.PI * 2, 0, Math.PI / 2), roofGreen); d.scale.y = .8; d.position.y = 27.5; g.add(d);
+  box(g, .25, 8, .25, 0, 37, 0, dark);
+  box(g, 4.5, .9, .1, 2.3, 44.1, 0, L(0xffffff)); box(g, 4.5, .9, .1, 2.3, 43.2, 0, L(0x1c3f94)); box(g, 4.5, .9, .1, 2.3, 42.3, 0, L(0xd52b1e));
+})();
+r = R(3031379); g = frame(r.x, r.z, r.a); register(g, INFO[3031379]);
+box(g, 46, 5, 96, 0, 27, 0, L(0xe9e9e4)); box(g, r.w + .6, .8, r.d + .6, 0, 26.6, 0, white);
+r = R(1359337); g = frame(r.x, r.z, r.a); register(g, INFO[1359337]);
+box(g, 7, 5, 7, 4, 17, -3, L(0xf3b88f)); domeTower(g, 1.1, 2.5, 4, 22, -3, gold);
+
+// ---------- Kremltürme ----------
+function towerModel(g, type, H, s, o) {
+  if (type === 'tsar') {
+    for (const a of [-1, 1]) for (const b of [-1, 1]) box(g, .7, 4, .7, a * 1.5, 9, b * 1.5, white);
+    box(g, 4.4, .6, 4.4, 0, 12.6, 0, white); hip(g, 4.8, 4.8, 4.2, 0, 13.2, 0, tentGreen); box(g, .1, 1.2, .1, 0, 17, 0, gold); return;
+  }
+  const rd = type === 'rd';
+  const prism = (w, h, y, mat = red) => rd ? cyl(g, w / 2, w / 2, h, 0, y, 0, mat, 22) : box(g, w, h, w, 0, y, 0, mat);
+  const tent = (w, h, y, mat = tentGreen) => rd ? cone(g, w / 2, h, 0, y, 0, mat, 16) : hip(g, w, w, h, 0, y, 0, mat);
+  const parapet = (w, y) => { prism(w + 1.6, 1.9, y); prism(w + 1.8, .35, y - .5, white); prism(w + 1.8, .3, y + 1.9, white); return y + 2.2; };
+  if (type === 'sq' || rd) {
+    let y = parapet(s, H * .45);
+    prism(s * .68, H * .12, y); y += H * .12; prism(s * .74, .3, y, white);
+    const th = H * .26; tent(s * .88, th, y);
+    const yl = y + th * .56; prism(s * .24, H * .07, yl);
+    tent(s * .34, H - yl - H * .07 - 1.2, yl + H * .07);
+    prism(s, H * .45, 0);
+    if (o.star) star(g, 1.7, 0, H - .6, 0); else box(g, .12, 1.8, .12, 0, H - 1.6, 0, gold);
+    return;
+  }
+  if (type === 'boro') {
+    let y = 0, w = s;
+    for (const [f, hh] of [[1, .3], [.8, .13], [.64, .11], [.5, .09]]) { w = s * f; box(g, w, H * hh, w, 0, y, 0, red); y += H * hh; box(g, w + .8, .5, w + .8, 0, y - .5, 0, white); }
+    cyl(g, s * .2, s * .2, H * .1, 0, y, 0, flatOf(red), 8); y += H * .1;
+    cone(g, s * .25, H - y - 2.4, 0, y, 0, tentGreen); star(g, 1.7, 0, H - 2.6, 0); return;
+  }
+  // Tortürme (Erlöser-, Nikolaus-, Dreifaltigkeitsturm); lokales +x zeigt nach außen
+  let y = H * .33;
+  box(g, s, y, s, 0, 0, 0, red);
+  box(g, .5, 7, 4.5, s / 2 + (o.bar ? o.bar : 0), 0, 0, dark); box(g, .5, 7, 4.5, -s / 2, 0, 0, dark);
+  if (o.bar) { box(g, o.bar, H * .2, s * .8, s / 2 + o.bar / 2, 0, 0, red); box(g, o.bar + .8, 1.6, s * .8 + .8, s / 2 + o.bar / 2, H * .2, 0, red); box(g, o.bar + 1, .3, s * .8 + 1, s / 2 + o.bar / 2, H * .2 + 1.6, 0, white); }
+  y = parapet(s, y);
+  for (const a of [-1, 1]) for (const b of [-1, 1]) { box(g, .9, 4, .9, a * s * .5, y - .3, b * s * .5, white); cone(g, .65, 1.6, a * s * .5, y + 3.7, b * s * .5, white, 4); }
+  const w2 = s * .74, h2 = H * .16;
+  box(g, w2, h2, w2, 0, y, 0, red); box(g, w2 + .6, .4, w2 + .6, 0, y, 0, white); box(g, w2 + .6, .4, w2 + .6, 0, y + h2 - .4, 0, white);
+  if (o.clock) for (let k = 0; k < 4; k++) {
+    const a = k * Math.PI / 2, cr = w2 * .33, px = Math.sin(a) * (w2 / 2 + .12), pz = Math.cos(a) * (w2 / 2 + .12);
+    for (const [rr, th, mat] of [[cr + .3, .2, gold], [cr, .32, L(0x15161a)]]) { const c = cyl(g, rr, rr, th, px, y + h2 * .5 - th / 2, pz, mat, 28); c.rotation.set(Math.PI / 2, 0, -a, 'YXZ'); c.rotation.y = a; c.rotation.x = Math.PI / 2; c.rotation.z = 0; }
+    box(g, .18, cr * .8, .1, px + Math.sin(a) * .2, y + h2 * .5, pz + Math.cos(a) * .2, gold).rotation.y = a;
+  }
+  y += h2;
+  box(g, s * .56, H * .07, s * .56, 0, y, 0, red); y += H * .07; box(g, s * .56 + .5, .35, s * .56 + .5, 0, y - .35, 0, white);
+  const ro = s * .27, ho = H * .1;
+  cyl(g, ro, ro, ho, 0, y, 0, flatOf(red), 8);
+  for (let k = 0; k < 8; k++) { const a = Math.PI / 8 + k * Math.PI / 4, ap = ro * Math.cos(Math.PI / 8) + .1; box(g, ro * .4, ho * .6, .3, Math.sin(a) * ap, y + ho * .2, Math.cos(a) * ap, dark).rotation.y = a; }
+  y += ho; cyl(g, ro + .4, ro + .4, .4, 0, y - .4, 0, flatOf(white), 8);
+  cone(g, s * .3, H - y - 3.2, 0, y, 0, o.gothic ? L(0xa7493a) : tentGreen); star(g, 1.9, 0, H - 3.4, 0);
+}
+for (const id in TOWERS) {
+  const b = byKey[id], [type, yr, text, st, clock] = TOWERS[id], r = R(id), H = b.h;
+  const big = !!st || type === 'rd';
+  const info = { name: b.n, sub: (yr ? yr + ' · ' : 'Mauerturm · ') + String(H).replace('.', ',') + ' m', text: text || '', color: '#a9412f', grp: big ? TU : null };
+  let a = r.a, x = r.x, z = r.z, bar = 0, s = Math.max(8.5, Math.min(15, Math.min(r.w, r.d)));
+  if (type === 'gate') {                             // Turm an das innere Ende des Grundrisses, Vorwerk nach außen
+    const gt = K.gates.reduce((m, q) => Math.hypot(q.p[0] - r.x, q.p[1] - r.z) < Math.hypot(m.p[0] - r.x, m.p[1] - r.z) ? q : m);
+    const dx = gt.p[0] - r.x, dz = gt.p[1] - r.z, dl = Math.hypot(dx, dz), long = Math.max(r.w, r.d);
+    a = Math.atan2(dz, dx); s = 13; bar = Math.max(0, long - s);
+    x -= dx / dl * bar / 2; z -= dz / dl * bar / 2;
+  }
+  towerModel(frame(x, z, a, info, H + 8), type, H, s, { star: st, clock, bar, gothic: id === '1359372' });
+}
+r = R(3061015); g = frame(r.x, r.z, r.a, INFO[3061015], 24);
+cyl(g, 8.2, 8.2, 10.5, 0, 0, 0, white, 20); cyl(g, 8.35, 8.35, 1, 0, 4.5, 0, red, 20);
+for (let k = 0; k < 16; k++) { const a = k * Math.PI / 8; box(g, 2, 3, .8, Math.sin(a) * 8, 10.5, Math.cos(a) * 8, white).rotation.y = a; }
+box(g, 17, 6, 4.2, 0, 0, 0, dark);
+
+// ---------- Basilius-Kathedrale ----------
+g = frame(348.5, -209.5, -.4625, INFO[3030568], 76);
+(function () {
+  const oct = (r1, h, x, y, z, mat = brickFlat) => cyl(g, r1, r1, h, x, y, z, mat, 8);
+  const chapel = (x, z, rr, h, domeR, mat) => {
+    oct(rr, h, x, 6, z); oct(rr + .35, .5, x, 6 + h * .45, z, whiteFlat); oct(rr + .45, .6, x, 6 + h - .6, z, whiteFlat);
+    for (let k = 0; k < 8; k++) { const a = Math.PI / 8 + k * Math.PI / 4, ap = rr * Math.cos(Math.PI / 8) + .1; box(g, rr * .3, h * .22, .3, x + Math.sin(a) * ap, 6 + h * .58, z + Math.cos(a) * ap, dark).rotation.y = a; }
+    const dr = domeR * .7; cyl(g, dr, dr, domeR * .9, x, 6 + h, z, white, 16);
+    onion(g, domeR, x, 6 + h + domeR * .9, z, mat);
+  };
+  const big = [patternMat('spiral', '#2f6fb0', '#f2f0e8'), patternMat('zig', '#f2efe6', '#c0392b', 3, 3), patternMat('spiral', '#2e8b57', '#e2b93b'), patternMat('diamond', '#b3312a', '#3a8f58', 3, 3)];
+  const small = [patternMat('ribs', '#3a8f58', '#e2b93b', 3), patternMat('diamond', '#2f6fb0', '#f2f0e8', 3, 3), patternMat('zig', '#e2b93b', '#3a8f58', 3, 3), patternMat('ribs', '#c0392b', '#f2efe6', 3)];
+  [[13.5, 0], [0, 13.5], [-13.5, 0], [0, -13.5]].forEach((q, i) => chapel(q[0], q[1], 3.9, 21, 3.7, big[i]));
+  [[7.9, 7.9], [-7.9, 7.9], [-7.9, -7.9], [7.9, -7.9]].forEach((q, i) => chapel(q[0], q[1], 2.6, 12, 2.5, small[i]));
+  oct(5.6, 26, 0, 6, 0); oct(6, .7, 0, 20, 0, whiteFlat); oct(6.2, 1, 0, 31, 0, whiteFlat);        // Mittelturm
+  for (let k = 0; k < 8; k++) { const a = Math.PI / 8 + k * Math.PI / 4; cone(g, 1.5, 3.2, Math.sin(a) * 5.2, 32, Math.cos(a) * 5.2, white, 4); }
+  oct(4.6, 6, 0, 32, 0);
+  const tent = new THREE.Mesh(new THREE.ConeGeometry(4.9, 19, 8, 1, true), patternMat('spiral', '#b5553c', '#d9b24a', 1, 1)); tent.material.flatShading = true;
+  tent.position.set(0, 47.5, 0); g.add(tent);
+  cyl(g, 1.1, 1.3, 2.4, 0, 56.4, 0, white, 12); onion(g, 1.7, 0, 58.6, 0, gold);
+  box(g, 7.4, 16, 7.4, 22.8, 0, 14.7, brick); box(g, 7.9, .5, 7.9, 22.8, 15.5, 14.7, white);            // Glockenturm
+  oct(3.5, 5, 22.8, 16, 14.7); cone(g, 3.9, 11, 22.8, 21, 14.7, tentGreen); onion(g, .8, 22.8, 31.6, 14.7, gold);
+  hip(g, 7, 7, 6, -15, 6, -15, tentGreen); hip(g, 7, 7, 6, -15, 6, 15, tentGreen);                        // Treppenaufgänge
+})();
+
+// ---------- Lenin-Mausoleum, Lobnoje Mesto ----------
+g = frame(148.2, -344.6, .733, INFO[3272726], 24);
+(function () {
+  const gr = L(0x7a2a26), bl = L(0x1d1c1f);
+  let y = 1.2;
+  for (const [w, h] of [[23, 3.6], [18.5, 2.3], [15, 1.9], [12.4, 1.6]]) { box(g, w, h, w * .96, 0, y, 0, gr); box(g, w + .2, .45, w * .96 + .2, 0, y + h * .55, 0, bl); y += h; }
+  for (const a of [-1, 1]) for (let k = 0; k < 4; k++) box(g, .7, 2.2, .7, -4.2 + k * 2.8, y, a * 3.4, bl);
+  box(g, 11.4, .9, 9, 0, y + 2.2, 0, gr);
+  box(g, 3.2, 2.6, .4, 0, 1.2, -11.1, bl);
+})();
+r = R(3226496); g = frame(r.x, r.z, r.a, INFO[3226496], 12);
+cyl(g, 6.4, 6.6, 1.5, 0, 0, 0, L(0xd9d5cc), 28); cyl(g, 6.5, 6.5, 1, 0, 1.5, 0, L(0xe7e3da), 28); cyl(g, 5.9, 5.9, .1, 0, 2.45, 0, L(0xb9b5ac), 28);
+
+// ---------- GUM, Historisches Museum, Auferstehungstor: Türme ----------
+r = R(3330565); g = frame(r.x, r.z, r.a); register(g, INFO[3330565]);
+for (const u of [-9, 9]) { box(g, 8, 34, 8, u, 0, 38, L(0xe5dcc8)); hip(g, 8.6, 8.6, 11, u, 34, 38, L(0x8fa3a6)); }
+for (const u of [-118, 118]) for (const v of [-34, 34]) { box(g, 7, 28, 7, u, 0, v, L(0xe5dcc8)); hip(g, 7.6, 7.6, 7, u, 28, v, L(0x8fa3a6)); }
+r = R(5963922); g = frame(r.x, r.z, r.a); register(g, INFO[5963922]);
+(function () {
+  const rm = L(0x8e2f25), tw = (u, v, s, h, t) => { box(g, s, h, s, u, 0, v, rm); box(g, s + .6, .5, s + .6, u, h - .5, v, white); hip(g, s + .4, s + .4, t, u, h, v, silver); box(g, .12, 2, .12, u, h + t, v, gold); };
+  for (const v of [-52, 52]) { tw(-8.5, v, 7.5, 36, 13); tw(8.5, v, 7.5, 36, 13); tw(-22, v + (v > 0 ? 3 : -3), 6, 27, 8); tw(22, v + (v > 0 ? 3 : -3), 6, 27, 8); }
+})();
+r = R(1932724); g = frame(r.x, r.z, r.a); register(g, INFO[1932724]);
+for (const u of [-6.5, 6.5]) { box(g, 7.5, 9, 7.5, u, 14, 0, red); box(g, 8, .5, 8, u, 22.5, 0, white); hip(g, 7.9, 7.9, 13, u, 23, 0, tentGreen); box(g, 4, 8, 13.4, u, 0, 0, dark); }
+
+// ---------- Zarenglocke und Zarenkanone ----------
+g = frame(63, -24, 0, INFO.bell, 14);
+cyl(g, 4.6, 5, 1.4, 0, 0, 0, L(0x8f8a82), 8);
+(function () {
+  const pr = [[3.3, 0], [3.1, .5], [2.5, 1.6], [2.1, 3.2], [1.9, 4.4], [1.4, 5.2], [.5, 5.6], [0, 5.7]];
+  const m = new THREE.Mesh(new THREE.LatheGeometry(pr.map(q => new THREE.Vector2(q[0], q[1])), 28), bronze); m.position.y = 1.4; g.add(m);
+  onion(g, .45, 0, 7.1, 0, gold);
+  box(g, 1.8, 2.2, .5, 4.2, 1.4, 3.4, bronze).rotation.set(-.25, .7, 0);
+  raster({ o: [58, -29, 68, -29, 68, -19, 58, -19] }, 1);
+})();
+g = frame(26, -96, .2, INFO.cannon, 10);
+(function () {
+  const b = cyl(g, .95, 1.15, 5.4, 0, 2, 0, bronze, 20); b.rotation.z = Math.PI / 2 - .12; b.position.set(0, 2.9, 0);
+  box(g, 4.4, 1.2, 1.9, -.4, 1.2, 0, L(0x3a3d3a));
+  for (const s of [-1, 1]) { const w = cyl(g, 1.5, 1.5, .4, -.6, 0, s * 1.5, L(0x2f3230), 20); w.rotation.x = Math.PI / 2; w.position.y = 1.5; }
+  for (const [x, z] of [[4.2, -.9], [4.2, .9], [5.6, 0]]) { const k = new THREE.Mesh(new THREE.SphereGeometry(.8, 16, 12), L(0x33363a)); k.position.set(x, .8, z); g.add(k); }
+  raster({ o: [22, -99, 33, -99, 33, -93, 22, -93] }, 1);
+})();
+
+// ---------- Käfig in der Mitte des Kathedralenplatzes (5 × 5 m, 4 m hoch, oben offen) ----------
+const CAGE = { X: -3, Z: 7, A: -.26, W: 5 };
+(function () {
+  const { X, Z, A, W } = CAGE, H = 4, iron = P(0x2b2d31, 0x9a9a9a, 50);
+  const g = frame(X, Z, A, { name: 'Käfig', sub: '5 × 5 m · 4 m hoch · oben offen', color: '#2b2d31', grp: S, text: 'Eisenkäfig in der Mitte des Kathedralenplatzes (frei hinzugefügt, kein historisches Objekt).' }, 9);
+  const h = W / 2;
+  box(g, W + .3, .12, W + .3, 0, 0, 0, L(0x3a3c40));                                             // Bodenplatte
+  for (const a of [-1, 1]) for (const b of [-1, 1]) box(g, .16, H, .16, a * h, 0, b * h, iron);   // Eckpfosten
+  for (const y of [.12, H / 2, H - .1]) for (const a of [-1, 1]) { box(g, W + .16, .1, .1, 0, y, a * h, iron); box(g, .1, .1, W + .16, a * h, y, 0, iron); }
+  const n = 20;
+  for (let i = 1; i < n; i++) {
+    const t = -h + i * W / n;
+    for (const a of [-1, 1]) { cyl(g, .025, .025, H, t, 0, a * h, iron, 8); cyl(g, .025, .025, H, a * h, 0, t, iron, 8); }
+  }
+  for (const a of [-.55, .55]) box(g, .12, 2.3, .12, a, 0, h + .03, iron);                        // Tür an der Südseite
+  box(g, 1.22, .12, .12, 0, 2.3, h + .03, iron); box(g, .18, .24, .1, .42, 1.05, h + .1, L(0x8a7a3a));
+  const c = Math.cos(A), sn = Math.sin(A), o = [];
+  for (const [u, v] of [[-h, -h], [h, -h], [h, h], [-h, h]]) o.push(X + u * c - v * sn, Z + u * sn + v * c);
+  raster({ o }, 1);
+})();
+
+// ---------- Raster fertigstellen: Abstand, Wasser, Brücke, Tore ----------
+(function () {
+  const src = blocked.slice();
+  for (let j = 1; j < NZ - 1; j++) for (let i = 1; i < NX - 1; i++) {
+    const n = j * NX + i; if (src[n]) continue;
+    if (src[n - 1] || src[n + 1] || src[n - NX] || src[n + NX] || src[n - NX - 1] || src[n - NX + 1] || src[n + NX - 1] || src[n + NX + 1]) blocked[n] = 2;
+  }
+  for (const w of K.WA) raster(w, 1);
+  for (const b of K.BR) raster(b, 0);
+  const carve = (pts, wid) => {
+    for (let k = 0; k + 3 < pts.length; k += 2) {
+      const ax = pts[k], az = pts[k + 1], bx = pts[k + 2], bz = pts[k + 3], n = Math.ceil(Math.hypot(bx - ax, bz - az));
+      for (let q = 0; q <= n; q++) { const x = ax + (bx - ax) * q / n, z = az + (bz - az) * q / n; for (let dx = -wid; dx <= wid; dx += 1) for (let dz = -wid; dz <= wid; dz += 1) if (dx * dx + dz * dz <= wid * wid) blocked[cz(z + dz) * NX + cx(x + dx)] = 0; }
+    }
+  };
+  carve([226, -196, 264, -238], 2.6);              // Erlösertor
+  carve([0, -416, 42, -458], 2.6);                 // Nikolaustor
+  carve([-282, 170, -312, 187, -340, 187], 2.6);   // Borowizki-Tor
+})();
+const START = [-5, 15];
+(function flood() {
+  const st = [cz(START[1]) * NX + cx(START[0])]; reach[st[0]] = 1;
+  while (st.length) {
+    const n = st.pop(), i = n % NX, j = (n / NX) | 0;
+    for (const [a, b] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const x = i + a, y = j + b; if (x < 0 || y < 0 || x >= NX || y >= NZ) continue;
+      const m = y * NX + x; if (!blocked[m] && !reach[m]) { reach[m] = 1; st.push(m); }
+    }
+  }
+})();
+
+// ---------- Bäume ----------
+(function () {
+  let seed = 7; const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
+  const pts = [];
+  for (const p of K.WD) {
+    let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9, ar = 0;
+    for (let i = 0, n = p.o.length; i < n; i += 2) { x0 = Math.min(x0, p.o[i]); x1 = Math.max(x1, p.o[i]); z0 = Math.min(z0, p.o[i + 1]); z1 = Math.max(z1, p.o[i + 1]); ar += p.o[i] * p.o[(i + 3) % n] - p.o[(i + 2) % n] * p.o[i + 1]; }
+    const want = Math.min(70, Math.abs(ar) / 2 / 95 | 0);
+    for (let k = 0, got = 0; k < want * 6 && got < want; k++) {
+      const x = x0 + rnd() * (x1 - x0), z = z0 + rnd() * (z1 - z0);
+      if (pip(x, z, p.o) && !isBlocked(x, z)) { pts.push([x, z, .8 + rnd() * .7]); got++; }
+    }
+  }
+  const trunks = new THREE.InstancedMesh(new THREE.CylinderGeometry(.3, .42, 3.4, 6), L(0x6b4a2f), pts.length);
+  const crowns = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(2.7, 1), L(0xffffff), pts.length);
+  const o = new THREE.Object3D(), c = new THREE.Color();
+  pts.forEach(([x, z, s], i) => {
+    o.position.set(x, 1.7 * s, z); o.scale.setScalar(s); o.updateMatrix(); trunks.setMatrixAt(i, o.matrix);
+    o.position.y = 5.3 * s; o.scale.set(s, s * 1.25, s); o.updateMatrix(); crowns.setMatrixAt(i, o.matrix);
+    crowns.setColorAt(i, c.setHSL(.29 + rnd() * .06, .42, .3 + rnd() * .1));
+  });
+  trunks.castShadow = crowns.castShadow = true; scene.add(trunks, crowns);
+})();
+
+scene.traverse(o => { if (o.isMesh && o !== groundMesh && !o.userData.flat) { o.castShadow = true; o.receiveShadow = true; } });
+
+// ---------- Beschriftungen ----------
+const labelSprites = [];
+for (const info of infos) {
+  if (!info.grp) continue;
+  const c = document.createElement('canvas'); c.width = 640; c.height = 72;
+  const x = c.getContext('2d'); x.font = '600 30px -apple-system, Helvetica, Arial, sans-serif';
+  const tw = x.measureText(info.name).width + 36, x0 = (640 - tw) / 2;
+  x.fillStyle = 'rgba(22,26,34,.8)'; x.beginPath();
+  x.moveTo(x0 + 18, 12); x.arcTo(x0 + tw, 12, x0 + tw, 60, 18); x.arcTo(x0 + tw, 60, x0, 60, 18); x.arcTo(x0, 60, x0, 12, 18); x.arcTo(x0, 12, x0 + tw, 12, 18); x.fill();
+  x.fillStyle = '#fff'; x.textAlign = 'center'; x.textBaseline = 'middle'; x.fillText(info.name, 320, 37);
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), depthTest: false, sizeAttenuation: false, transparent: true }));
+  s.scale.set(.3, .034, 1); s.position.set(info.x, info.ly, info.z); s.renderOrder = 10;
+  scene.add(s); labelSprites.push(s);
+}
+
+// ---------- Avatar ----------
+// Figur blickt nach lokal +z; Maße in Metern (Körpergröße 1,70), die Gruppe ist zur Sichtbarkeit vergrößert
+function makeFigure(st) {
+  const avatar = new THREE.Group(); avatar.scale.setScalar(1.7); avatar.position.set(st.at[0], 0, st.at[1]); scene.add(avatar);
+  const limbs = {}, formal = !!st.tie;
+  const suit = L(st.top), legs = L(st.legs), lapel = L(0x232c42), shirt = L(0xf4f4f1), tie = L(0x7c1524), skin = L(st.skin), skinD = L(st.skinD);
+  const hair = L(st.hair), brow = L(st.brow), shoe = P(st.shoe, 0x666666, formal ? 60 : 15), lip = L(0xa86f5f), eyeW = L(0xf2f2ee), iris = L(st.iris), pupil = L(0x14161a);
+  const sph = (p, r, x, y, z, mat, sx = 1, sy = 1, sz = 1) => { const m = new THREE.Mesh(new THREE.SphereGeometry(r, 20, 14), mat); m.position.set(x, y, z); m.scale.set(sx, sy, sz); p.add(m); return m; };
+  const tube = (p, rt, rb, len, mat) => cyl(p, rt, rb, len, 0, -len, 0, mat, 14);                 // hängt vom Gelenk nach unten
+  const joint = (p, x, y, z) => { const g = new THREE.Group(); g.position.set(x, y, z); p.add(g); return g; };
+
+  for (const [n, sx] of [['L', -1], ['R', 1]]) {                                                 // Beine mit Knie
+    const hip = limbs['leg' + n] = joint(avatar, sx * .095, .86, 0);
+    tube(hip, .088, .074, .42, legs); sph(hip, .074, 0, -.42, 0, legs);
+    const knee = limbs['knee' + n] = joint(hip, 0, -.42, 0);
+    tube(knee, .07, .056, .39, legs);
+    if (!formal) { box(hip, .012, .1, .09, sx * .088, -.3, 0, legs); cyl(knee, .062, .066, .1, 0, -.4, 0, shoe, 14); }   // Beintasche, Stiefelschaft
+    box(knee, .095, .05, .25, 0, -.44, .055, shoe); sph(knee, .05, 0, -.415, .15, shoe, .95, .55, 1.1); box(knee, .09, .02, .07, 0, -.44, -.06, L(0x050505));
+  }
+  // Rumpf
+  box(avatar, .3, .14, .17, 0, .8, 0, legs);
+  const jacket = cyl(avatar, .205, .2, .54, 0, .9, 0, suit, 20); jacket.scale.z = .63;
+  sph(avatar, .12, 0, 1.385, 0, suit, 1.9, .5, 1);                                               // Schultern
+  if (formal) {                                                                                  // Sakko, Hemd, Krawatte
+    const skirt = cyl(avatar, .2, .21, .16, 0, .76, 0, suit, 20); skirt.scale.z = .66;
+    const vee = new THREE.Shape(); vee.moveTo(-.062, 0); vee.lineTo(.062, 0); vee.lineTo(0, -.27);
+    const vm = new THREE.Mesh(new THREE.ShapeGeometry(vee), shirt); vm.position.set(0, 1.44, .1255); vm.rotation.x = -.06; avatar.add(vm);
+    for (const sx of [-1, 1]) { const l = box(avatar, .05, .3, .012, sx * .052, 1.14, .127, lapel); l.rotation.z = sx * .22; l.rotation.x = -.06; }
+    box(avatar, .05, .04, .02, 0, 1.4, .128, tie); const tb = box(avatar, .052, .2, .012, 0, 1.2, .133, tie); tb.rotation.x = -.05;
+    for (const y of [1.08, .98]) sph(avatar, .011, 0, y, .134, L(0x0c0d12));
+    box(avatar, .07, .012, .01, -.1, 1.27, .127, shirt);                                         // Einstecktuch
+  } else {                                                                                       // Sweatshirt mit Bündchen
+    const hem = cyl(avatar, .207, .207, .05, 0, .88, 0, L(st.trim), 20); hem.scale.z = .64;
+    box(avatar, .034, .034, .004, .085, 1.27, .127, L(st.trim));
+  }
+  cyl(avatar, .058, .062, .08, 0, 1.43, 0, skin, 14); cyl(avatar, .067, .07, .04, 0, 1.425, 0, formal ? shirt : L(st.trim), 14);
+
+  for (const [n, sx] of [['L', -1], ['R', 1]]) {                                                 // Arme mit Ellbogen
+    const sh = limbs['arm' + n] = joint(avatar, sx * .24, 1.375, 0); sh.rotation.z = sx * .07;
+    sph(sh, .058, 0, 0, 0, suit); tube(sh, .06, .052, .28, suit);
+    const el = limbs['elbow' + n] = joint(sh, 0, -.28, 0); sph(el, .052, 0, 0, 0, suit);
+    tube(el, .05, .043, .24, suit); cyl(el, .044, .044, .018, 0, -.257, 0, formal ? shirt : L(st.trim), 14);
+    sph(el, .04, 0, -.3, .005, skin, .62, 1.1, .95); sph(el, .014, -sx * .022, -.285, .028, skin, 1, 1.9, 1);
+    for (let f = 0; f < 4; f++) sph(el, .0105, (f - 1.5) * .0125, -.345, .008, skin, 1, 2.1, 1);
+  }
+  // Kopf: Rotationsprofil (Kinn schmal, Schädel breit), in x gestaucht; Gesicht zeigt nach +z
+  const head = joint(avatar, 0, 1.612, .005); limbs.head = head; head.scale.setScalar(1.1);
+  const HX = st.headX, HZ = 1.02, rosy = L(st.rosy), tooth = L(0xf3efe6), mz = st.beard ? .0045 : 0;
+  const lathe = (pts, mat, phi0 = 0, phiLen = Math.PI * 2) => { const m = new THREE.Mesh(new THREE.LatheGeometry(pts.map(q => new THREE.Vector2(q[0], q[1])), 28, phi0, phiLen), mat); m.scale.set(HX, 1, HZ); head.add(m); return m; };
+  const FACE = [[0, -.122], [.028, -.12], [.05, -.108], [.066, -.085], [.078, -.055], [.088, -.02], [.096, .02], [.1, .055], [.096, .085], [.082, .108], [.058, .122], [.03, .129], [0, .131]];
+  lathe(FACE, skin);
+  sph(head, .024, 0, -.1, .03, st.beard ? L(st.beard) : skin, 1.1, .8, .8);                      // Kinn
+  for (const sx of [-1, 1]) {
+    sph(head, .025, sx * .087 * HX / .9, .002, -.006, skin, .4, 1, .7); sph(head, .012, sx * .091 * HX / .9, .002, -.003, skinD, .3, .9, .6);   // Ohren
+    sph(head, .0125, sx * .034, .02, .0848, eyeW, 1.3, .68, .3);                                 // Augen
+    sph(head, .0066, sx * .034, .0205, .0874, iris, 1, 1, .3); sph(head, .003, sx * .034, .0205, .0889, pupil, 1, 1, .3);
+    sph(head, .0011, sx * .034 + .002, .0228, .0898, eyeW);                                      // Glanzlicht
+    const lash = new THREE.Mesh(new THREE.TorusGeometry(.017, .0013, 5, 14, 1.5), L(0x4a3d33));  // Lidstrich oben
+    lash.rotation.z = Math.PI / 2 - .75; lash.position.set(sx * .034, .0125, .0885); head.add(lash);
+    const b = new THREE.Mesh(new THREE.TorusGeometry(.024, st.browW, 6, 14, 1.25), brow);        // bogenförmige Brauen
+    b.rotation.z = Math.PI / 2 - .625 + sx * .1; b.position.set(sx * .035, .0175, .0905); head.add(b);
+    for (const k of [0, 1]) { const c = new THREE.Mesh(new THREE.TorusGeometry(.012, .0012, 4, 8, .9), skinD); c.rotation.z = sx > 0 ? -.45 - k * .35 : Math.PI - .45 + k * .35; c.position.set(sx * .05, .017 - k * .004, .078); head.add(c); }   // Lachfältchen
+  }
+  const bridge = box(head, .01, .046, .016, 0, -.028, .09, skin); bridge.rotation.x = -.25;
+  sph(head, .0135, 0, -.036, .106, skin, 1, .85, .95); for (const sx of [-1, 1]) sph(head, .0082, sx * .012, -.04, .099, skin, 1, .8, 1);
+  for (const sx of [-1, 1]) sph(head, .003, sx * .006, -.0445, .1045, skinD, 1, .6, 1);          // Nasenlöcher
+  const smile = new THREE.Mesh(new THREE.TorusGeometry(.03, .0032, 6, 18, 1.5), lip);            // nach oben gebogener Mund
+  smile.rotation.z = Math.PI * 1.5 - .75; smile.position.set(0, -.04, .0755 + mz); head.add(smile);
+  const teeth = new THREE.Mesh(new THREE.TorusGeometry(.0285, .0022, 6, 14, 1.0), tooth); teeth.rotation.z = Math.PI * 1.5 - .5; teeth.position.set(0, -.0375, .0752 + mz); head.add(teeth);
+  sph(head, .013, 0, -.0775, .069 + mz, rosy, 1.3, .32, .5);                                     // Unterlippe
+  if (st.beard) {                                                                                // kurzer Vollbart mit Schnurrbart
+    const bm = L(st.beard);
+    lathe(FACE.slice(0, 5).map(q => [q[0] + .0028, q[1]]), bm, -1.75, 3.5);
+    for (const sx of [-1, 1]) { const m = box(head, .03, .008, .008, sx * .014, -.056, .083, bm); m.rotation.z = -sx * .22; m.rotation.y = sx * .25; }
+  }
+  // Haar: Seiten und Hinterkopf kurz; hairPhi legt fest, wie weit Stirn und Schläfen frei bleiben
+  const HAIR = [[.082, -.05], [.092, -.02], [.1, .02], [.104, .055], [.1, .085], [.086, .108], [.062, .123], [.032, .1315], [0, .134]];
+  lathe(HAIR, hair, st.hairPhi, Math.PI * 2 - 2 * st.hairPhi);
+  lathe(HAIR.slice(st.topFrom).map(q => [q[0] + st.hairLift, q[1] + st.hairLift]), L(st.hairTop), 0, Math.PI * 2).position.y = .004;
+  avatar.traverse(o => { if (o.isMesh) o.castShadow = true; });
+  return { g: avatar, limbs, path: [], phase: 0, stiff: !!st.stiff, caged: !!st.caged, name: st.name };
+}
+const figures = [
+  makeFigure({ name: 'Putin', at: START, tie: 1, stiff: 1, top: 0x1a2133, legs: 0x1a2133, shoe: 0x101012, skin: 0xe8b9a0, skinD: 0xcf9f86, rosy: 0xe9b09a,
+    hair: 0xb3a68d, hairTop: 0xbfb298, brow: 0x9c8e74, browW: .0026, iris: 0x7b9bb3, headX: .9, hairPhi: 1.3, topFrom: 4, hairLift: .0005 }),
+  makeFigure({ name: 'Selenskyj', at: [CAGE.X, CAGE.Z], caged: 1, top: 0x4d5a3a, legs: 0x3e4731, trim: 0x434f33, shoe: 0x2a2219, skin: 0xe0ae90, skinD: 0xc4927a, rosy: 0xd99f8c,
+    hair: 0x2c2520, hairTop: 0x2c2520, brow: 0x241e1a, browW: .0036, iris: 0x4a3423, headX: .94, hairPhi: .95, topFrom: 3, hairLift: .003, beard: 0x4a3f38 }),
+];
+let fig = figures[0];
+const marker = new THREE.Mesh(new THREE.RingGeometry(1.1, 1.7, 32), new THREE.MeshBasicMaterial({ color: 0xffd23f, transparent: true, opacity: .9, depthTest: false }));
+marker.rotation.x = -Math.PI / 2; marker.position.y = .6; marker.visible = false; marker.renderOrder = 5; scene.add(marker);
+
+// ---------- Pfadsuche (A*) ----------
+function freeCell(i, j) {                             // nächste von der Figur erreichbare Zelle
+  if (reach[j * NX + i]) return j * NX + i;
+  for (let r = 1; r < 260; r++) {
+    let best = -1, bd = 1e9;
+    const chk = (x, y) => { if (x < 0 || y < 0 || x >= NX || y >= NZ) return; const n = y * NX + x; if (!reach[n]) return; const d = (x - i) * (x - i) + (y - j) * (y - j); if (d < bd) { bd = d; best = n; } };
+    for (let a = -r; a <= r; a++) { chk(i + a, j - r); chk(i + a, j + r); chk(i - r, j + a); chk(i + r, j + a); }
+    if (best >= 0) return best;
+  }
+  return -1;
+}
+function los(ax, az, bx, bz) {
+  const n = Math.ceil(Math.hypot(bx - ax, bz - az));
+  for (let k = 0; k <= n; k++) { const t = n ? k / n : 0; if (isBlocked(ax + (bx - ax) * t, az + (bz - az) * t)) return false; }
+  return true;
+}
+function findPath(sx, sz, tx, tz) {
+  const s = freeCell(cx(sx), cz(sz)), goal = freeCell(cx(tx), cz(tz));
+  if (s < 0 || goal < 0) return [];
+  const gs = new Float32Array(NX * NZ).fill(Infinity), from = new Int32Array(NX * NZ).fill(-1), closed = new Uint8Array(NX * NZ);
+  const hf = [], hn = [], gi = goal % NX, gj = (goal / NX) | 0;
+  const push = (f, n) => { let k = hf.length; hf.push(f); hn.push(n); while (k > 0) { const p = (k - 1) >> 1; if (hf[p] <= hf[k]) break; [hf[p], hf[k]] = [hf[k], hf[p]]; [hn[p], hn[k]] = [hn[k], hn[p]]; k = p; } };
+  const pop = () => {
+    const top = hn[0], lf = hf.pop(), ln = hn.pop();
+    if (hf.length) { hf[0] = lf; hn[0] = ln; let k = 0; for (;;) { let m = k; const l = 2 * k + 1, r = l + 1; if (l < hf.length && hf[l] < hf[m]) m = l; if (r < hf.length && hf[r] < hf[m]) m = r; if (m === k) break; [hf[m], hf[k]] = [hf[k], hf[m]]; [hn[m], hn[k]] = [hn[k], hn[m]]; k = m; } }
+    return top;
+  };
+  gs[s] = 0; push(0, s);
+  while (hf.length) {
+    const cur = pop(); if (cur === goal) break; if (closed[cur]) continue; closed[cur] = 1;
+    const i = cur % NX, j = (cur / NX) | 0;
+    for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) {
+      if (!a && !b) continue; const x = i + a, y = j + b;
+      if (x < 0 || y < 0 || x >= NX || y >= NZ) continue; const n = y * NX + x;
+      if (blocked[n] || closed[n]) continue;
+      if (a && b && (blocked[j * NX + x] || blocked[y * NX + i])) continue;
+      const ng = gs[cur] + (a && b ? 1.4142 : 1);
+      if (ng < gs[n]) { gs[n] = ng; from[n] = cur; const dx = Math.abs(x - gi), dy = Math.abs(y - gj); push(ng + 1.15 * (Math.max(dx, dy) + .4142 * Math.min(dx, dy)), n); }
+    }
+  }
+  if (goal !== s && from[goal] < 0) return [];
+  const pts = []; for (let n = goal; n >= 0 && n !== s; n = from[n]) pts.push([wx(n % NX), wz((n / NX) | 0)]);
+  pts.push([sx, sz]); pts.reverse();
+  if (cz(tz) * NX + cx(tx) === goal) pts.push([tx, tz]);
+  const out = []; let k = 0;
+  while (k < pts.length - 1) { let m = Math.min(pts.length - 1, k + 120); while (m > k + 1 && !los(pts[k][0], pts[k][1], pts[m][0], pts[m][1])) m--; out.push(pts[m]); k = m; }
+  return out;
+}
+
+// ---------- Steuerung ----------
+let speed = 11;
+function walkTo(x, z) {                              // gilt für die gewählte Figur
+  if (fig.caged) {                                   // Figur im Käfig: geht in Richtung des Ziels, höchstens bis an die Stäbe
+    const c = Math.cos(CAGE.A), sn = Math.sin(CAGE.A), m = CAGE.W / 2 - .7, cl = v => Math.max(-m, Math.min(m, v));
+    const u = cl((x - CAGE.X) * c + (z - CAGE.Z) * sn), v = cl(-(x - CAGE.X) * sn + (z - CAGE.Z) * c);
+    fig.path = [[CAGE.X + u * c - v * sn, CAGE.Z + u * sn + v * c]]; marker.visible = false; return;
+  }
+  const p = findPath(fig.g.position.x, fig.g.position.z, x, z);
+  if (!p.length) return;
+  fig.path = p; const e = p[p.length - 1]; marker.position.set(e[0], .6, e[1]); marker.visible = true;
+}
+const infoEl = document.getElementById('info');
+function showInfo(info) {
+  infoEl.querySelector('h2').textContent = info.name;
+  infoEl.querySelector('.sub').textContent = info.sub || '';
+  infoEl.querySelector('p').textContent = info.text || '';
+  infoEl.style.display = 'block';
+}
+document.getElementById('close').onclick = () => infoEl.style.display = 'none';
+const list = document.getElementById('places');
+const centre = { name: 'Kathedralenplatz (Mitte)', sub: 'Sobornaja Ploschtschad', color: '#c6c0b2', grp: S, x: START[0], z: START[1],
+  text: 'Ältester Platz Moskaus und Zentrum des Kremls, umgeben von drei Kathedralen, dem Glockenturm Iwan der Große und dem Facettenpalast.' };
+const redSq = { name: 'Roter Platz (Mitte)', sub: 'Krasnaja Ploschtschad', color: '#77726e', grp: RP, x: 190, z: -330,
+  text: 'Rund 330 m langer Platz vor der Ostmauer des Kremls, begrenzt von Basilius-Kathedrale, GUM und Historischem Museum.' };
+for (const grp of [S, KR, TU, RP]) {
+  const h = document.createElement('li'); h.className = 'grp'; h.textContent = grp; list.appendChild(h);
+  for (const info of [centre, redSq, ...infos].filter(q => q.grp === grp)) {
+    const li = document.createElement('li'); li.innerHTML = '<i style="background:' + (info.color || '#ccc') + '"></i>';
+    li.appendChild(document.createTextNode(info.name));
+    li.onclick = () => { walkTo(info.x, info.z); showInfo(info); };
+    list.appendChild(li);
+  }
+}
+let labelsOn = true;
+document.getElementById('toggle').onclick = () => list.style.display = list.style.display === 'none' ? '' : 'none';
+document.getElementById('labels').onclick = e => { labelsOn = !labelsOn; e.target.classList.toggle('on', labelsOn); };
+const whoBtn = document.getElementById('who');
+function select(f) { fig = f; whoBtn.textContent = 'Figur: ' + f.name; marker.visible = false; }
+whoBtn.onclick = () => select(figures[(figures.indexOf(fig) + 1) % figures.length]);
+select(fig);
+document.getElementById('fast').onclick = e => { speed = speed > 11 ? 11 : 34; e.target.classList.toggle('on', speed > 11); };
+if (innerWidth < 640) list.style.display = 'none';
+
+let yaw = -.25, pitch = .5, dist = 150;
+const camTarget = new THREE.Vector3(START[0], 4, START[1]), ptrs = new Map(), ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
+let moved = 0, pinch = 0;
+const cv = renderer.domElement;
+cv.addEventListener('pointerdown', e => { cv.setPointerCapture(e.pointerId); ptrs.set(e.pointerId, [e.clientX, e.clientY]); if (ptrs.size === 1) moved = 0; pinch = 0; });
+cv.addEventListener('pointermove', e => {
+  const p = ptrs.get(e.pointerId); if (!p) return;
+  const dx = e.clientX - p[0], dy = e.clientY - p[1]; p[0] = e.clientX; p[1] = e.clientY;
+  if (ptrs.size === 1) {
+    moved += Math.abs(dx) + Math.abs(dy);
+    if (moved > 6) { yaw -= dx * .006; pitch = Math.max(.05, Math.min(1.5, pitch + dy * .005)); }
+  } else if (ptrs.size === 2) {
+    const [a, b] = [...ptrs.values()], d = Math.hypot(a[0] - b[0], a[1] - b[1]);
+    if (pinch) dist = Math.max(3.5, Math.min(1500, dist * pinch / d)); pinch = d; moved = 99;
+  }
+});
+const up = e => {
+  if (!ptrs.delete(e.pointerId)) return; pinch = 0;
+  if (ptrs.size || moved > 6 || e.type !== 'pointerup') return;
+  ndc.set(e.clientX / innerWidth * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
+  ray.setFromCamera(ndc, camera);
+  const fh = ray.intersectObjects(figures.map(f => f.g), true)[0];                 // Klick auf eine Figur wählt sie aus
+  if (fh) { for (let o = fh.object; o; o = o.parent) { const f = figures.find(q => q.g === o); if (f) return select(f); } }
+  const hit = ray.intersectObjects([groundMesh, ...solids], true)[0]; if (!hit) return;
+  walkTo(hit.point.x, hit.point.z);
+  for (let o = hit.object; o; o = o.parent) if (o.userData.info) { showInfo(o.userData.info); break; }
+};
+cv.addEventListener('pointerup', up); cv.addEventListener('pointercancel', up);
+cv.addEventListener('wheel', e => { e.preventDefault(); dist = Math.max(3.5, Math.min(1500, dist * Math.exp(e.deltaY * .0012))); }, { passive: false });
+addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
+
+// Prüfansichten: #map zeigt das Wegenetz, #cam=x,z,yaw,pitch,dist setzt Figur und Kamera
+if (location.hash.startsWith('#cam=')) { const q = location.hash.slice(5).split(',').map(Number); if (q[5]) fig = figures[q[5]]; fig.g.position.set(q[0], 0, q[1]); camTarget.set(q[0], q[4] < 25 ? 2.3 : 4, q[1]); yaw = q[2]; pitch = q[3]; dist = q[4]; }
+if (location.hash === '#map') {
+  const c = document.createElement('canvas'); c.id = 'map'; c.width = NX; c.height = NZ; c.style.cssText = 'position:fixed;left:0;top:0;width:' + NX * 2 + 'px;z-index:9';
+  const x = c.getContext('2d'), im = x.createImageData(NX, NZ);
+  for (let n = 0; n < NX * NZ; n++) { const v = blocked[n] === 1 ? [60, 60, 70] : blocked[n] ? [150, 150, 160] : reach[n] ? [255, 255, 255] : [255, 170, 60]; im.data.set([...v, 255], n * 4); }
+  x.putImageData(im, 0, 0); document.body.appendChild(c);
+}
+
+// ---------- Schleife ----------
+const clock = new THREE.Clock(), tmp = new THREE.Vector3();
+(function loop() {
+  requestAnimationFrame(loop);
+  const dt = Math.min(clock.getDelta(), .05);
+  for (const f of figures) {
+    const a = f.g; let walking = false, step = speed * dt;
+    while (f.path.length && step > 0) {
+      const [tx, tz] = f.path[0], dx = tx - a.position.x, dz = tz - a.position.z, d = Math.hypot(dx, dz);
+      if (d <= step) { a.position.x = tx; a.position.z = tz; step -= d; f.path.shift(); }
+      else {
+        a.position.x += dx / d * step; a.position.z += dz / d * step; step = 0;
+        let da = Math.atan2(dx, dz) - a.rotation.y; da = Math.atan2(Math.sin(da), Math.cos(da));
+        a.rotation.y += da * Math.min(1, dt * 10);
+      }
+      walking = true;
+    }
+    if (walking) f.phase += dt * (speed > 11 ? 15 : 9);
+    // Gangbild: bei "stiff" schwingt nur der linke Arm, der rechte bleibt fast ruhig am Körper
+    const w = walking ? 1 : 0, sn = Math.sin(f.phase) * w, cs = Math.cos(f.phase) * w, k = Math.min(1, dt * 12);
+    const pose = { legL: sn * .62, legR: -sn * .62, kneeL: Math.max(0, -cs) * .95, kneeR: Math.max(0, cs) * .95,
+      armL: -sn * .6, armR: sn * (f.stiff ? .1 : .6), elbowL: -.12 - Math.max(0, -sn) * .45, elbowR: f.stiff ? -.16 : -.12 - Math.max(0, sn) * .45, head: 0 };
+    for (const n in pose) f.limbs[n].rotation.x += (pose[n] - f.limbs[n].rotation.x) * k;
+    a.position.y = walking ? Math.abs(Math.sin(f.phase)) * .05 : 0;
+  }
+  if (!fig.path.length) marker.visible = false;
+  marker.scale.setScalar(1 + Math.sin(clock.elapsedTime * 5) * .12);
+
+  camTarget.lerp(tmp.set(fig.g.position.x, dist < 25 ? 2.3 : 4, fig.g.position.z), Math.min(1, dt * 5));
+  camera.position.set(camTarget.x + dist * Math.sin(yaw) * Math.cos(pitch), camTarget.y + dist * Math.sin(pitch), camTarget.z + dist * Math.cos(yaw) * Math.cos(pitch));
+  camera.lookAt(camTarget);
+  sun.position.copy(camTarget).add(SUN); sun.target.position.copy(camTarget);
+  for (const s of labelSprites) s.visible = labelsOn && s.position.distanceTo(camera.position) < Math.max(420, dist * 2.2);
+  renderer.render(scene, camera);
+})();
+</script>
+</body>
+</html>
