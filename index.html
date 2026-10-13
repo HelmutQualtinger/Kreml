@@ -44,7 +44,7 @@
 <div id="head" class="panel">
   <h1>Moskauer Kreml und Roter Platz</h1>
   <p>Klicken: gewählte Figur geht dorthin · Klick auf eine Figur wählt sie · Ziehen: Kamera drehen · Mausrad / Zwei-Finger: Zoom</p>
-  <button id="toggle">Orte</button><button id="labels" class="on">Beschriftung</button><button id="fast">Schnell gehen</button><button id="who"></button>
+  <button id="toggle">Orte</button><button id="labels" class="on">Beschriftung</button><button id="fast">Schnell gehen</button><button id="music" class="on">Musik</button><button id="who"></button>
   <ul id="places"></ul>
 </div>
 <div id="info" class="panel"><span id="close">×</span><h2></h2><div class="sub"></div><p></p></div>
@@ -953,13 +953,49 @@ if (location.hash === '#map') {
   x.putImageData(im, 0, 0); document.body.appendChild(c);
 }
 
+// ---------- Musik: Kalinka (Iwan Larionow, 1860), im Browser erzeugt ----------
+// Refrain in a-Moll, je Takt [Melodie als [Halbtöne über A4, Dauer in Sechzehnteln], Akkord]; jeder Durchgang wird schneller
+const EDUR = [-17, [-13, -10, -5]], AMOLL = [-24, [-12, -9, -5]];
+const BARS = [
+  [[[5, 2], [2, 1], [3, 1], [5, 2], [2, 1], [3, 1]], EDUR], [[[5, 2], [3, 2], [2, 2], [0, 2]], AMOLL], [[[7, 4], [7, 2], [7, 2]], EDUR],
+  [[[5, 2], [2, 1], [3, 1], [5, 2], [2, 1], [3, 1]], EDUR], [[[5, 2], [3, 2], [2, 2], [0, 2]], AMOLL], [[[0, 4], [7, 4]], AMOLL]];
+const musicBtn = document.getElementById('music');
+let actx = null, master, musicOn = true, mNext = 0, mBar = 0, mUnit = .17;
+function pluck(semi, t, len, vol, type) {            // gezupfter Ton mit schnellem Abklingen
+  const o = actx.createOscillator(), g = actx.createGain();
+  o.type = type; o.frequency.value = 440 * Math.pow(2, semi / 12);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(.001, t + len);
+  o.connect(g); g.connect(master); o.start(t); o.stop(t + len);
+}
+function startMusic() {                              // Browser erlauben Ton erst nach einer Eingabe
+  if (!actx) { actx = new (window.AudioContext || window.webkitAudioContext)(); master = actx.createGain(); master.gain.value = .35; master.connect(actx.destination); }
+  actx.resume();
+}
+setInterval(() => {
+  if (!actx || actx.state !== 'running') return;
+  if (mNext < actx.currentTime) mNext = actx.currentTime + .06;
+  while (mNext < actx.currentTime + 1.5) {
+    const [mel, [bass, chord]] = BARS[mBar], u = mUnit; let t = mNext;
+    for (const [s, n] of mel) { pluck(s, t, Math.max(.22, n * u * 1.5), .5, 'sawtooth'); pluck(s + 12, t, .16, .18, 'triangle'); t += n * u; }
+    for (const k of [0, 4]) { pluck(bass, mNext + k * u, .3, .7, 'triangle'); for (const s of chord) pluck(s, mNext + (k + 2) * u, .14, .16, 'triangle'); }
+    mNext += 8 * u; mBar = (mBar + 1) % BARS.length;
+    if (!mBar) mUnit = mUnit < .075 ? .17 : mUnit * .87;
+  }
+}, 120);
+addEventListener('pointerdown', e => { if (musicOn && e.target !== musicBtn && (!actx || actx.state !== 'running')) startMusic(); }, true);
+musicBtn.onclick = () => { musicOn = !musicOn; musicBtn.classList.toggle('on', musicOn); if (musicOn) startMusic(); else if (actx) actx.suspend(); };
+
 // ---------- Schleife ----------
 const clock = new THREE.Clock(), tmp = new THREE.Vector3();
 (function loop() {
   requestAnimationFrame(loop);
   const dt = Math.min(clock.getDelta(), .05);
   for (const f of figures) {
-    const a = f.g; let walking = false, step = speed * dt;
+    const a = f.g; let walking = false, step = (f.caged ? 1.3 : speed) * dt;
+    if (f.caged && !f.path.length) {                 // geht im Käfig auf und ab
+      f.turn = -(f.turn || 1); const u = f.turn * (CAGE.W / 2 - .7);
+      f.path = [[CAGE.X + u * Math.cos(CAGE.A), CAGE.Z + u * Math.sin(CAGE.A)]];
+    }
     while (f.path.length && step > 0) {
       const [tx, tz] = f.path[0], dx = tx - a.position.x, dz = tz - a.position.z, d = Math.hypot(dx, dz);
       if (d <= step) { a.position.x = tx; a.position.z = tz; step -= d; f.path.shift(); }
@@ -970,7 +1006,7 @@ const clock = new THREE.Clock(), tmp = new THREE.Vector3();
       }
       walking = true;
     }
-    if (walking) f.phase += dt * (speed > 11 ? 15 : 9);
+    if (walking) f.phase += dt * (f.caged ? 5.5 : speed > 11 ? 15 : 9);
     // Gangbild: bei "stiff" schwingt nur der linke Arm, der rechte bleibt fast ruhig am Körper
     const w = walking ? 1 : 0, sn = Math.sin(f.phase) * w, cs = Math.cos(f.phase) * w, k = Math.min(1, dt * 12);
     const pose = { legL: sn * .62, legR: -sn * .62, kneeL: Math.max(0, -cs) * .95, kneeR: Math.max(0, cs) * .95,
