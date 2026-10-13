@@ -44,7 +44,7 @@
 <div id="head" class="panel">
   <h1>Moskauer Kreml und Roter Platz</h1>
   <p>Klicken: gewählte Figur geht dorthin · Klick auf eine Figur wählt sie · Ziehen: Kamera drehen · Mausrad / Zwei-Finger: Zoom</p>
-  <button id="toggle">Orte</button><button id="labels" class="on">Beschriftung</button><button id="fast">Schnell gehen</button><button id="music" class="on">Musik</button><button id="who"></button>
+  <button id="toggle">Orte</button><button id="labels" class="on">Beschriftung</button><button id="fast">Schnell gehen</button><button id="music" class="on">Musik</button><button id="dance" class="on">Kasatschok</button><button id="who"></button>
   <ul id="places"></ul>
 </div>
 <div id="info" class="panel"><span id="close">×</span><h2></h2><div class="sub"></div><p></p></div>
@@ -808,10 +808,10 @@ function makeFigure(st) {
   lathe(HAIR, hair, st.hairPhi, Math.PI * 2 - 2 * st.hairPhi);
   lathe(HAIR.slice(st.topFrom).map(q => [q[0] + st.hairLift, q[1] + st.hairLift]), L(st.hairTop), 0, Math.PI * 2).position.y = .004;
   avatar.traverse(o => { if (o.isMesh) o.castShadow = true; });
-  return { g: avatar, limbs, path: [], phase: 0, stiff: !!st.stiff, caged: !!st.caged, name: st.name };
+  return { g: avatar, limbs, path: [], phase: 0, stiff: !!st.stiff, caged: !!st.caged, dance: !!st.dance, dancer: !!st.dance, name: st.name };
 }
 const figures = [
-  makeFigure({ name: 'Putin', at: START, tie: 1, stiff: 1, top: 0x1a2133, legs: 0x1a2133, shoe: 0x101012, skin: 0xe8b9a0, skinD: 0xcf9f86, rosy: 0xe9b09a,
+  makeFigure({ name: 'Putin', at: START, tie: 1, stiff: 1, dance: 1, top: 0x1a2133, legs: 0x1a2133, shoe: 0x101012, skin: 0xe8b9a0, skinD: 0xcf9f86, rosy: 0xe9b09a,
     hair: 0xb3a68d, hairTop: 0xbfb298, brow: 0x9c8e74, browW: .0026, iris: 0x7b9bb3, headX: .9, hairPhi: 1.3, topFrom: 4, hairLift: .0005 }),
   makeFigure({ name: 'Selenskyj', at: [CAGE.X, CAGE.Z], caged: 1, top: 0x4d5a3a, legs: 0x3e4731, trim: 0x434f33, shoe: 0x2a2219, skin: 0xe0ae90, skinD: 0xc4927a, rosy: 0xd99f8c,
     hair: 0x2c2520, hairTop: 0x2c2520, brow: 0x241e1a, browW: .0036, iris: 0x4a3423, headX: .94, hairPhi: .95, topFrom: 3, hairLift: .003, beard: 0x4a3f38 }),
@@ -872,6 +872,7 @@ function findPath(sx, sz, tx, tz) {
 // ---------- Steuerung ----------
 let speed = 11;
 function walkTo(x, z) {                              // gilt für die gewählte Figur
+  if (fig.dance) { fig.dance = false; danceBtn.classList.remove('on'); }
   if (fig.caged) {                                   // Figur im Käfig: geht in Richtung des Ziels, höchstens bis an die Stäbe
     const c = Math.cos(CAGE.A), sn = Math.sin(CAGE.A), m = CAGE.W / 2 - .7, cl = v => Math.max(-m, Math.min(m, v));
     const u = cl((x - CAGE.X) * c + (z - CAGE.Z) * sn), v = cl(-(x - CAGE.X) * sn + (z - CAGE.Z) * c);
@@ -906,6 +907,8 @@ for (const grp of [S, KR, TU, RP]) {
 let labelsOn = true;
 document.getElementById('toggle').onclick = () => list.style.display = list.style.display === 'none' ? '' : 'none';
 document.getElementById('labels').onclick = e => { labelsOn = !labelsOn; e.target.classList.toggle('on', labelsOn); };
+const danceBtn = document.getElementById('dance');
+danceBtn.onclick = () => { const on = danceBtn.classList.toggle('on'); for (const f of figures) if (f.dancer) { f.dance = on; f.path = []; } marker.visible = false; };
 const whoBtn = document.getElementById('who');
 function select(f) { fig = f; whoBtn.textContent = 'Figur: ' + f.name; marker.visible = false; }
 whoBtn.onclick = () => select(figures[(figures.indexOf(fig) + 1) % figures.length]);
@@ -991,7 +994,21 @@ const clock = new THREE.Clock(), tmp = new THREE.Vector3();
   requestAnimationFrame(loop);
   const dt = Math.min(clock.getDelta(), .05);
   for (const f of figures) {
-    const a = f.g; let walking = false, step = (f.caged ? 1.3 : speed) * dt;
+    const a = f.g; let walking = false, dancing = false, step = (f.caged ? 1.3 : speed) * dt;
+    if (f.dance && !f.path.length) {                 // Kasatschok: in der Hocke im Kreis um den Käfig, im Takt der Musik
+      const R = 5.6, ex = a.position.x - CAGE.X, ez = a.position.z - CAGE.Z, d = Math.hypot(ex, ez) || 1;
+      if (Math.abs(d - R) > .6) {                    // erst an den Kreis herangehen
+        const q = [CAGE.X + ex / d * R, CAGE.Z + ez / d * R];
+        f.path = d < 12 ? [q] : findPath(a.position.x, a.position.z, q[0], q[1]);
+        if (!f.path.length) { f.dance = false; danceBtn.classList.remove('on'); }
+      } else {
+        const ang = Math.atan2(ex, ez) + dt * .3; dancing = true;
+        a.position.x = CAGE.X + R * Math.sin(ang); a.position.z = CAGE.Z + R * Math.cos(ang);
+        let da = ang + Math.PI / 2 - a.rotation.y; da = Math.atan2(Math.sin(da), Math.cos(da));
+        a.rotation.y += da * Math.min(1, dt * 10);
+        f.phase += dt * Math.PI / (4 * mUnit);
+      }
+    }
     if (f.caged && !f.path.length) {                 // geht im Käfig auf und ab
       f.turn = -(f.turn || 1); const u = f.turn * (CAGE.W / 2 - .7);
       f.path = [[CAGE.X + u * Math.cos(CAGE.A), CAGE.Z + u * Math.sin(CAGE.A)]];
@@ -1009,10 +1026,14 @@ const clock = new THREE.Clock(), tmp = new THREE.Vector3();
     if (walking) f.phase += dt * (f.caged ? 5.5 : speed > 11 ? 15 : 9);
     // Gangbild: bei "stiff" schwingt nur der linke Arm, der rechte bleibt fast ruhig am Körper
     const w = walking ? 1 : 0, sn = Math.sin(f.phase) * w, cs = Math.cos(f.phase) * w, k = Math.min(1, dt * 12);
-    const pose = { legL: sn * .62, legR: -sn * .62, kneeL: Math.max(0, -cs) * .95, kneeR: Math.max(0, cs) * .95,
+    const kick = Math.max(0, Math.min(1, .5 + Math.sin(f.phase) * 1.3));          // 1 = linkes Bein gestreckt, 0 = rechtes
+    const pose = dancing ? { legL: -1.75 + .3 * kick, legR: -1.45 - .3 * kick, kneeL: 2.4 - 2.35 * kick, kneeR: .05 + 2.35 * kick,
+      armL: -1.5, armR: -1.3, elbowL: 0, elbowR: 0, head: 0 } : { legL: sn * .62, legR: -sn * .62, kneeL: Math.max(0, -cs) * .95, kneeR: Math.max(0, cs) * .95,
       armL: -sn * .6, armR: sn * (f.stiff ? .1 : .6), elbowL: -.12 - Math.max(0, -sn) * .45, elbowR: f.stiff ? -.16 : -.12 - Math.max(0, sn) * .45, head: 0 };
     for (const n in pose) f.limbs[n].rotation.x += (pose[n] - f.limbs[n].rotation.x) * k;
-    a.position.y = walking ? Math.abs(Math.sin(f.phase)) * .05 : 0;
+    f.limbs.elbowL.rotation.z += ((dancing ? 1.5 : 0) - f.limbs.elbowL.rotation.z) * k;       // Arme vor der Brust verschränkt
+    f.limbs.elbowR.rotation.z += ((dancing ? -1.5 : 0) - f.limbs.elbowR.rotation.z) * k;
+    a.position.y = dancing ? a.position.y + (-.94 + Math.abs(Math.cos(f.phase)) * .14 - a.position.y) * k : walking ? Math.abs(Math.sin(f.phase)) * .05 : 0;
   }
   if (!fig.path.length) marker.visible = false;
   marker.scale.setScalar(1 + Math.sin(clock.elapsedTime * 5) * .12);

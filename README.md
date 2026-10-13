@@ -11,7 +11,7 @@ Begehbare 3D-Szene im Browser (Three.js) auf Grundrissen aus OpenStreetMap.
 - **Kathedralenplatz:** Mariä-Entschlafens-, Erzengel-Michael- und Mariä-Verkündigungs-Kathedrale, Gewandniederlegungskirche, Zwölf-Apostel-Kirche, Glockenturm Iwan der Große, Facettenpalast, Zarenglocke, Zarenkanone
 - **Kreml:** Großer Kremlpalast mit Terem-Palast, Senatspalast, Arsenal, Staatlicher Kremlpalast, Rüstkammer, Lustpalast, Patriarchenpalast, Kremlmauer mit allen 20 Türmen
 - **Roter Platz und Umgebung:** Basilius-Kathedrale, Lenin-Mausoleum, GUM, Historisches Museum, Kasaner Kathedrale, Auferstehungstor, Lobnoje Mesto, Manege, umliegende Stadtgebäude, Moskwa
-- **Figuren:** zwei stilisierte Figuren (Putin, Selenskyj) und ein oben offener Käfig (5 × 5 m, 4 m hoch) in der Mitte des Kathedralenplatzes; die zweite Figur geht im Käfig auf und ab
+- **Figuren:** zwei stilisierte Figuren (Putin, Selenskyj) und ein oben offener Käfig (5 × 5 m, 4 m hoch) in der Mitte des Kathedralenplatzes; die zweite Figur geht im Käfig auf und ab, die erste tanzt im Takt der Musik Kasatschok um den Käfig (Schalter „Kasatschok“; ein Klick auf ein Ziel beendet den Tanz)
 - **Musik:** der Refrain von „Kalinka“ (Iwan Larionow, 1860), im Browser mit Web Audio erzeugt; startet mit der ersten Eingabe, Schalter „Musik“
 
 Lage, Umriss und Ausrichtung der Gebäude stammen aus OpenStreetMap. Die Baukörper sind vereinfachte Modelle, Höhen sind teils geschätzt, das Gelände ist flach. Käfig und Figuren sind frei hinzugefügt.
